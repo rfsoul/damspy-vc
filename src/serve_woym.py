@@ -157,23 +157,56 @@ def polarisation_sort_key(value: Any) -> tuple[int, str]:
     return order, text
 
 
-def measurement_manifest(logs_root: Path, measurement_name: str) -> dict[str, Any] | None:
-    measurement_dir = logs_root / measurement_name
+def iter_measurement_directories(logs_root: Path) -> list[Path]:
+    if not path_is_dir(logs_root):
+        return []
+
+    discovered: list[Path] = []
+    pending = [logs_root]
+
+    while pending:
+        current_dir = pending.pop()
+
+        try:
+            entries = iter_directory(current_dir)
+        except OSError:
+            continue
+
+        yaml_path = current_dir / "1_meas_azimuth.yaml"
+        if path_is_file(yaml_path):
+            discovered.append(current_dir)
+
+        for entry in entries:
+            if not entry.is_dir():
+                continue
+
+            if entry.name == "1_meas_azimuth":
+                continue
+
+            pending.append(current_dir / entry.name)
+
+    return discovered
+
+
+def measurement_manifest(logs_root: Path, measurement_dir: Path) -> dict[str, Any] | None:
     yaml_path = measurement_dir / "1_meas_azimuth.yaml"
 
     if not path_is_dir(measurement_dir) or not path_is_file(yaml_path):
         return None
 
+    measurement_id = display_path(measurement_dir, logs_root)
+    measurement_name = measurement_dir.name
+
     updated_at = max(
         os.stat(extended_path(measurement_dir)).st_mtime,
         os.stat(extended_path(yaml_path)).st_mtime,
     )
-    measurement_timestamp = measurement_name_timestamp(measurement_name)
+    measurement_timestamp = measurement_name_timestamp(measurement_id)
 
     return {
-        "measurement_id": measurement_name,
+        "measurement_id": measurement_id,
         "measurement_name": measurement_name,
-        "yaml_relative_path": f"{measurement_name}/1_meas_azimuth.yaml",
+        "yaml_relative_path": display_path(yaml_path, logs_root),
         "updated_at": format_timestamp(updated_at),
         "_updated_at": updated_at,
         "_sort_at": measurement_timestamp if measurement_timestamp is not None else updated_at,
@@ -181,16 +214,10 @@ def measurement_manifest(logs_root: Path, measurement_name: str) -> dict[str, An
 
 
 def list_measurements(logs_root: Path) -> list[dict[str, Any]]:
-    if not path_is_dir(logs_root):
-        return []
-
     manifests: list[dict[str, Any]] = []
 
-    for entry in iter_directory(logs_root):
-        if not entry.is_dir():
-            continue
-
-        manifest = measurement_manifest(logs_root, entry.name)
+    for measurement_dir in iter_measurement_directories(logs_root):
+        manifest = measurement_manifest(logs_root, measurement_dir)
         if manifest is not None:
             manifests.append(manifest)
 

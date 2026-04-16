@@ -403,15 +403,11 @@ function renderYamlPicker() {
     button.className = "yaml-option";
     button.classList.toggle("is-selected", measurement.measurement_id === analyserState.selectedMeasurementId);
 
-    const title = document.createElement("span");
-    title.className = "yaml-option-title";
-    title.textContent = measurement.measurement_name;
-
     const meta = document.createElement("span");
     meta.className = "yaml-option-meta";
     meta.textContent = measurement.yaml_relative_path + " | Updated " + formatLocalDateTime(measurement.updated_at);
 
-    button.append(title, meta);
+    button.append(meta);
     button.addEventListener("click", async () => {
       analyserState.pickerOpen = false;
       renderYamlPicker();
