@@ -631,11 +631,7 @@ textarea {
 }
 
 .plot-grid-row-header {
-  padding: 0.55rem 0.4rem;
-  display: grid;
-  gap: 0.55rem;
-  align-content: center;
-  justify-items: center;
+  padding: 0.45rem 0.25rem;
 }
 
 .plot-card {
@@ -653,6 +649,7 @@ textarea {
   width: 100%;
   gap: 0.12rem;
   align-items: start;
+  position: relative;
 }
 
 .plot-readout {
@@ -663,6 +660,8 @@ textarea {
   border: 1px solid var(--border);
   display: grid;
   gap: 0.1rem;
+  justify-items: center;
+  text-align: center;
 }
 
 .plot-readout-title {
@@ -679,6 +678,7 @@ textarea {
 .plot-readout-row {
   display: flex;
   align-items: center;
+  justify-content: center;
   gap: 0.3rem;
   color: var(--muted-strong);
   font-size: 0.62rem;
@@ -802,22 +802,28 @@ textarea {
   font-size: 0.82rem;
 }
 
-.plot-grid-row-photo {
-  width: min(100%, 7.15rem);
-  max-width: 100%;
-  aspect-ratio: 1;
-  object-fit: cover;
-  border-radius: 0.85rem;
-  border: 1px solid var(--border);
-  background: var(--panel-strong);
-}
-
 .plot-grid-row-label {
   font-size: 1.12rem;
   font-weight: 900;
   letter-spacing: 0.03em;
   text-transform: uppercase;
   line-height: 1;
+}
+
+.plot-orientation-photo {
+  position: absolute;
+  top: -1.55rem;
+  left: calc(-4.8rem - 0.45rem);
+  width: 11.55rem;
+  max-width: min(52%, 11.55rem);
+  aspect-ratio: 1;
+  object-fit: cover;
+  border-radius: 1rem;
+  border: 1px solid var(--border);
+  background: var(--panel-strong);
+  box-shadow: var(--shadow);
+  pointer-events: none;
+  z-index: 2;
 }
 
 .plot-empty,

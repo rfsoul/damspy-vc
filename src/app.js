@@ -144,18 +144,18 @@ function formatFrequency(value) {
 }
 
 function formatDbm(value) {
-  const formatted = formatNumber(value, 2);
+  const formatted = formatNumber(value, 1);
   return formatted === MISSING ? MISSING : formatted + " dBm";
 }
 
 function formatDb(value) {
   const numericValue = Number(value);
-  return Number.isFinite(numericValue) ? numericValue.toFixed(2) + " dB" : MISSING;
+  return Number.isFinite(numericValue) ? numericValue.toFixed(1) + " dB" : MISSING;
 }
 
 function formatDbd(value) {
   const numericValue = Number(value);
-  return Number.isFinite(numericValue) ? numericValue.toFixed(2) + " dBd" : MISSING;
+  return Number.isFinite(numericValue) ? numericValue.toFixed(1) + " dBd" : MISSING;
 }
 
 function formatSignedDb(value) {
@@ -163,7 +163,7 @@ function formatSignedDb(value) {
   if (!Number.isFinite(numericValue)) {
     return MISSING;
   }
-  return (numericValue >= 0 ? "+" : "") + numericValue.toFixed(2) + " dB";
+  return (numericValue >= 0 ? "+" : "") + numericValue.toFixed(1) + " dB";
 }
 
 function formatEOverEmax(value) {
@@ -743,7 +743,7 @@ function renderPlotGrid(data) {
   const plotMap = new Map(data.plots.map((plot) => [plotKey(plot.polarisation, plot.orientation), plot]));
   const grid = document.createElement("div");
   grid.className = "plot-grid";
-  grid.style.gridTemplateColumns = `10.75rem repeat(${data.rows.length}, minmax(0, 1fr))`;
+  grid.style.gridTemplateColumns = `4.8rem repeat(${data.rows.length}, minmax(0, 1fr))`;
 
   const corner = document.createElement("div");
   corner.className = "plot-grid-corner";
@@ -761,20 +761,6 @@ function renderPlotGrid(data) {
     const rowHeader = document.createElement("div");
     rowHeader.className = "plot-grid-row-header";
 
-    const rowImageUrl = data.orientation_images && data.orientation_images[row];
-    if (rowImageUrl) {
-      const rowImage = document.createElement("img");
-      rowImage.className = "plot-grid-row-photo";
-      rowImage.src = rowImageUrl;
-      rowImage.alt = row + " orientation";
-      rowImage.loading = "lazy";
-      rowImage.decoding = "async";
-      rowImage.addEventListener("error", () => {
-        rowImage.remove();
-      });
-      rowHeader.append(rowImage);
-    }
-
     const rowLabel = document.createElement("div");
     rowLabel.className = "plot-grid-row-label";
     rowLabel.textContent = row;
@@ -784,14 +770,15 @@ function renderPlotGrid(data) {
 
     for (const column of data.rows) {
       const plot = plotMap.get(plotKey(column, row));
-      grid.append(createPlotCard(plot, column, row, data, analyserState.plotDisplayMode));
+      const orientationImageUrl = column === data.rows[0] && data.orientation_images ? data.orientation_images[row] : null;
+      grid.append(createPlotCard(plot, column, row, data, analyserState.plotDisplayMode, orientationImageUrl));
     }
   }
 
   analyserElements.plotGridContainer.append(grid);
 }
 
-function createPlotCard(plot, row, column, dataset, mode) {
+function createPlotCard(plot, row, column, dataset, mode, orientationImageUrl = null) {
   if (!plot || !plot.series.length) {
     const empty = document.createElement("div");
     empty.className = "plot-card";
@@ -821,6 +808,20 @@ function createPlotCard(plot, row, column, dataset, mode) {
   const legend = createPlotLegend(preparedPlot, mode);
   const visual = document.createElement("div");
   visual.className = "plot-visual";
+
+  if (orientationImageUrl) {
+    const orientationImage = document.createElement("img");
+    orientationImage.className = "plot-orientation-photo";
+    orientationImage.src = orientationImageUrl;
+    orientationImage.alt = column + " orientation";
+    orientationImage.loading = "lazy";
+    orientationImage.decoding = "async";
+    orientationImage.addEventListener("error", () => {
+      orientationImage.remove();
+    });
+    visual.append(orientationImage);
+  }
+
   visual.append(svg, legend);
 
   card.append(readout, visual);
@@ -933,11 +934,11 @@ function updatePlotReadout(container, angle, rows, pinned, mode) {
 }
 
 function createPlotSvg(preparedPlot, readout, row, column, mode) {
-  const width = 336;
-  const height = 320;
+  const width = 380;
+  const height = 340;
   const centerX = width / 2;
-  const centerY = 150;
-  const radius = 118;
+  const centerY = 156;
+  const radius = 136;
   const yMin = Number(preparedPlot.yMin);
   const yMax = Number(preparedPlot.yMax);
   const angleLabels = [0, 45, 90, 135, 180, 225, 270, 315];
