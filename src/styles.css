@@ -1,6 +1,7 @@
 :root {
   --bg: #04070c;
   --bg-radial: #14314a;
+  --bg-deep: #020406;
   --panel: rgba(11, 18, 27, 0.92);
   --panel-strong: rgba(16, 28, 40, 0.96);
   --panel-soft: rgba(255, 255, 255, 0.03);
@@ -17,6 +18,78 @@
   --danger-bg: #3c1111;
   --danger-text: #ffd8d8;
   --shadow: 0 22px 48px rgba(0, 0, 0, 0.35);
+  --topbar-bg: rgba(5, 11, 18, 0.72);
+  --button-ghost-bg: rgba(255, 255, 255, 0.03);
+  --button-ghost-active-bg: rgba(102, 215, 255, 0.12);
+  --timestamp-bg: rgba(102, 215, 255, 0.08);
+  --selected-bg: rgba(102, 215, 255, 0.08);
+  --operator-bg: rgba(38, 21, 11, 0.95);
+  --empty-bg: rgba(60, 17, 17, 0.96);
+  --plot-cell-bg: rgba(255, 255, 255, 0.03);
+  --plot-card-bg: rgba(9, 16, 24, 0.94);
+  --plot-readout-bg: rgba(255, 255, 255, 0.03);
+  --plot-svg-bg: transparent;
+  --plot-paper-fill: #111923;
+  --plot-paper-stroke: rgba(255, 255, 255, 0.16);
+  --legend-bg: rgba(255, 255, 255, 0.04);
+  --empty-dash: rgba(255, 255, 255, 0.14);
+  --plot-grid-stroke: rgba(255, 255, 255, 0.22);
+  --plot-axis-stroke: rgba(255, 255, 255, 0.4);
+  --plot-reference-stroke: rgba(255, 255, 255, 0.62);
+  --plot-label: rgba(244, 247, 251, 0.96);
+  --crosshair-stroke: rgba(255, 255, 255, 0.58);
+  --hover-marker-stroke: rgba(244, 247, 251, 0.96);
+  --page-background:
+    radial-gradient(circle at top left, rgba(102, 215, 255, 0.22) 0%, transparent 34%),
+    radial-gradient(circle at bottom right, rgba(255, 178, 102, 0.18) 0%, transparent 30%),
+    linear-gradient(155deg, var(--bg-radial) 0%, var(--bg) 50%, var(--bg-deep) 100%);
+}
+
+body[data-theme="light"] {
+  --bg: #edf4fb;
+  --bg-radial: #ffffff;
+  --bg-deep: #d8e6f2;
+  --panel: rgba(255, 255, 255, 0.94);
+  --panel-strong: rgba(248, 251, 255, 0.98);
+  --panel-soft: rgba(11, 18, 27, 0.04);
+  --text: #112033;
+  --muted: #5b6d80;
+  --muted-strong: #24364a;
+  --accent: #006fa6;
+  --accent-strong: #1f89c2;
+  --accent-warm: #c77527;
+  --border: rgba(17, 32, 51, 0.12);
+  --border-strong: rgba(0, 111, 166, 0.28);
+  --warning-bg: #fff2e8;
+  --warning-text: #7a3f12;
+  --danger-bg: #fdecec;
+  --danger-text: #862020;
+  --shadow: 0 22px 48px rgba(25, 56, 86, 0.12);
+  --topbar-bg: rgba(255, 255, 255, 0.82);
+  --button-ghost-bg: rgba(17, 32, 51, 0.04);
+  --button-ghost-active-bg: rgba(0, 111, 166, 0.12);
+  --timestamp-bg: rgba(0, 111, 166, 0.08);
+  --selected-bg: rgba(0, 111, 166, 0.08);
+  --operator-bg: rgba(255, 242, 232, 0.98);
+  --empty-bg: rgba(253, 236, 236, 0.98);
+  --plot-cell-bg: rgba(17, 32, 51, 0.04);
+  --plot-card-bg: rgba(255, 255, 255, 0.98);
+  --plot-readout-bg: rgba(17, 32, 51, 0.03);
+  --plot-svg-bg: transparent;
+  --plot-paper-fill: #ffffff;
+  --plot-paper-stroke: rgba(17, 32, 51, 0.1);
+  --legend-bg: rgba(17, 32, 51, 0.05);
+  --empty-dash: rgba(17, 32, 51, 0.2);
+  --plot-grid-stroke: rgba(60, 72, 88, 0.3);
+  --plot-axis-stroke: rgba(60, 72, 88, 0.52);
+  --plot-reference-stroke: rgba(60, 72, 88, 0.7);
+  --plot-label: #425466;
+  --crosshair-stroke: rgba(60, 72, 88, 0.6);
+  --hover-marker-stroke: rgba(255, 255, 255, 0.95);
+  --page-background:
+    radial-gradient(circle at top left, rgba(102, 215, 255, 0.12) 0%, transparent 30%),
+    radial-gradient(circle at bottom right, rgba(255, 178, 102, 0.12) 0%, transparent 26%),
+    linear-gradient(160deg, #ffffff 0%, #eef5fb 48%, #dbe8f4 100%);
 }
 
 * {
@@ -27,10 +100,7 @@ html,
 body {
   margin: 0;
   min-height: 100%;
-  background:
-    radial-gradient(circle at top left, rgba(102, 215, 255, 0.22) 0%, transparent 34%),
-    radial-gradient(circle at bottom right, rgba(255, 178, 102, 0.18) 0%, transparent 30%),
-    linear-gradient(155deg, var(--bg-radial) 0%, var(--bg) 50%, #020406 100%);
+  background: var(--page-background);
   color: var(--text);
   font-family: "Bahnschrift", "Aptos", "Segoe UI", sans-serif;
 }
@@ -67,7 +137,7 @@ textarea {
   padding: 1rem 1.25rem;
   border: 1px solid var(--border);
   border-radius: 1.35rem;
-  background: rgba(5, 11, 18, 0.72);
+  background: var(--topbar-bg);
   backdrop-filter: blur(16px);
   box-shadow: var(--shadow);
 }
@@ -94,6 +164,13 @@ textarea {
 .topbar-nav {
   display: flex;
   flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+.topbar-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
   gap: 0.75rem;
 }
 
@@ -225,13 +302,13 @@ textarea {
 
 .button-secondary,
 .button-ghost {
-  background: rgba(255, 255, 255, 0.03);
+  background: var(--button-ghost-bg);
   color: var(--muted-strong);
   border-color: var(--border);
 }
 
 .button-ghost.is-active {
-  background: rgba(102, 215, 255, 0.12);
+  background: var(--button-ghost-active-bg);
   color: var(--text);
   border-color: var(--border-strong);
 }
@@ -264,7 +341,7 @@ textarea {
 
 .operator-panel {
   display: none;
-  background: rgba(38, 21, 11, 0.95);
+  background: var(--operator-bg);
   border-color: rgba(255, 178, 102, 0.26);
 }
 
@@ -328,7 +405,7 @@ textarea {
 .empty-state {
   display: none;
   padding: 1.45rem 1.6rem;
-  background: rgba(60, 17, 17, 0.96);
+  background: var(--empty-bg);
   border-color: rgba(255, 216, 216, 0.25);
 }
 
@@ -366,7 +443,7 @@ textarea {
 .timestamp-pill {
   padding: 0.55rem 0.85rem;
   border-radius: 999px;
-  background: rgba(102, 215, 255, 0.08);
+  background: var(--timestamp-bg);
   border: 1px solid var(--border-strong);
   color: var(--muted-strong);
   font-size: 0.95rem;
@@ -408,7 +485,7 @@ textarea {
 
 .yaml-option.is-selected {
   border-color: var(--border-strong);
-  background: rgba(102, 215, 255, 0.08);
+  background: var(--selected-bg);
 }
 
 .yaml-option-title {
@@ -450,6 +527,12 @@ textarea {
   overflow-x: auto;
 }
 
+.plot-section-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+}
+
 .plot-grid {
   display: grid;
   gap: 1rem;
@@ -465,7 +548,7 @@ textarea {
   padding: 0.95rem;
   border-radius: 1rem;
   border: 1px solid var(--border);
-  background: rgba(255, 255, 255, 0.03);
+  background: var(--plot-cell-bg);
   color: var(--muted-strong);
   font-weight: 800;
 }
@@ -491,7 +574,7 @@ textarea {
   padding: 1rem;
   border-radius: 1.2rem;
   border: 1px solid var(--border);
-  background: rgba(9, 16, 24, 0.94);
+  background: var(--plot-card-bg);
   display: grid;
   gap: 0.85rem;
 }
@@ -519,7 +602,7 @@ textarea {
   min-height: 5.3rem;
   padding: 0.75rem 0.85rem;
   border-radius: 0.95rem;
-  background: rgba(255, 255, 255, 0.03);
+  background: var(--plot-readout-bg);
   border: 1px solid var(--border);
   display: grid;
   gap: 0.25rem;
@@ -554,41 +637,64 @@ textarea {
   width: 100%;
   height: auto;
   border-radius: 0.95rem;
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0.02));
+  background: var(--plot-svg-bg);
 }
 
-.plot-svg .grid-line {
-  stroke: rgba(255, 255, 255, 0.08);
+.plot-svg .polar-paper {
+  fill: var(--plot-paper-fill);
+  stroke: var(--plot-paper-stroke);
   stroke-width: 1;
 }
 
-.plot-svg .axis-line {
-  stroke: rgba(255, 255, 255, 0.28);
-  stroke-width: 1.5;
+.plot-svg .polar-ring,
+.plot-svg .polar-spoke {
+  stroke: var(--plot-grid-stroke);
+  stroke-width: 1.1;
 }
 
-.plot-svg .axis-label,
+.plot-svg .polar-outer-ring,
+.plot-svg .polar-reference {
+  stroke: var(--plot-axis-stroke);
+  stroke-width: 1.6;
+}
+
+.plot-svg .polar-ring {
+  stroke-dasharray: 5 6;
+}
+
+.plot-svg .polar-reference {
+  stroke-dasharray: 3 5;
+  stroke: var(--plot-reference-stroke);
+}
+
+.plot-svg .polar-label,
+.plot-svg .polar-angle-label,
 .plot-svg .tick-label {
-  fill: var(--muted);
-  font-size: 11px;
+  fill: var(--plot-label);
+  font-size: 11.5px;
+  font-weight: 700;
   font-family: "Bahnschrift", "Aptos", "Segoe UI", sans-serif;
+}
+
+.plot-svg .polar-angle-label {
+  font-size: 10.5px;
 }
 
 .plot-svg .series-line {
   fill: none;
-  stroke-width: 2.4;
+  stroke-width: 2.8;
   stroke-linecap: round;
   stroke-linejoin: round;
 }
 
 .plot-svg .crosshair {
-  stroke: rgba(255, 255, 255, 0.35);
+  stroke: var(--crosshair-stroke);
   stroke-width: 1.2;
   stroke-dasharray: 4 4;
 }
 
 .plot-svg .hover-marker {
-  stroke: rgba(4, 7, 12, 0.95);
+  stroke: var(--hover-marker-stroke);
   stroke-width: 1.5;
 }
 
@@ -605,7 +711,7 @@ textarea {
   gap: 0.45rem;
   padding: 0.45rem 0.7rem;
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.04);
+  background: var(--legend-bg);
   border: 1px solid var(--border);
   color: var(--muted-strong);
   font-size: 0.86rem;
@@ -619,7 +725,7 @@ textarea {
 .plot-grid-empty {
   padding: 1.4rem;
   border-radius: 1.1rem;
-  border: 1px dashed rgba(255, 255, 255, 0.14);
+  border: 1px dashed var(--empty-dash);
   color: var(--muted);
   text-align: center;
 }
@@ -627,6 +733,11 @@ textarea {
 @media (max-width: 1100px) {
   .main-grid {
     grid-template-columns: 1fr;
+  }
+
+  .plot-section-controls {
+    width: 100%;
+    justify-content: flex-start;
   }
 
   .plot-grid-row-header {
@@ -654,5 +765,10 @@ textarea {
 
   .topbar {
     padding: 0.9rem 1rem;
+  }
+
+  .topbar-actions {
+    width: 100%;
+    justify-content: space-between;
   }
 }

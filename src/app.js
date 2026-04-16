@@ -2,6 +2,7 @@ const JSON_URL = "/DAMspy-core/src/DAMspy_logs/latest_woym.json";
 const REFRESH_MS = 2000;
 const MISSING = "\u2014";
 const RESULTS_ROUTE = "/results-analyser";
+const THEME_STORAGE_KEY = "damspy-theme";
 const CHANNEL_COLORS = [
   "#66d7ff",
   "#ffb266",
@@ -12,6 +13,11 @@ const CHANNEL_COLORS = [
   "#fb7185",
   "#38bdf8"
 ];
+const PLOT_DISPLAY_MODES = {
+  E_OVER_EMAX: "e_over_emax",
+  DB: "db"
+};
+const E_OVER_EMAX_DB_GUIDES = [-20, -10, -6, -3];
 
 const measurementElements = {
   page: document.getElementById("measurementPage"),
@@ -50,7 +56,12 @@ const analyserElements = {
   testCountValue: document.getElementById("testCountValue"),
   measurementUpdatedAt: document.getElementById("measurementUpdatedAt"),
   testFolderList: document.getElementById("testFolderList"),
-  plotGridContainer: document.getElementById("plotGridContainer")
+  plotGridContainer: document.getElementById("plotGridContainer"),
+  plotModeDescription: document.getElementById("plotModeDescription"),
+  plotModeButtons: Array.from(document.querySelectorAll("[data-plot-mode]"))
+};
+const themeElements = {
+  toggleButton: document.getElementById("themeToggleButton")
 };
 
 const routeButtons = Array.from(document.querySelectorAll("[data-route]"));
@@ -65,9 +76,13 @@ const analyserState = {
   defaultMeasurementId: "",
   selectedMeasurementId: "",
   dataset: null,
+  plotDisplayMode: PLOT_DISPLAY_MODES.E_OVER_EMAX,
   pickerOpen: false,
   listRequestInFlight: false,
   dataRequestSerial: 0
+};
+const uiState = {
+  theme: "dark"
 };
 
 function getValue(source, path, fallback = MISSING) {
@@ -138,6 +153,11 @@ function formatSignedDb(value) {
   return (numericValue >= 0 ? "+" : "") + numericValue.toFixed(2) + " dB";
 }
 
+function formatEOverEmax(value) {
+  const numericValue = Number(value);
+  return Number.isFinite(numericValue) ? numericValue.toFixed(3) + " E/Emax" : MISSING;
+}
+
 function formatDegrees(value) {
   const formatted = formatNumber(value, 1);
   return formatted === MISSING ? MISSING : formatted + "\u00b0";
@@ -164,6 +184,52 @@ function formatLocalDateTime(value) {
 
 function formatChannelLabel(channel) {
   return channel === MISSING || channel === null || channel === undefined ? "Ch ?" : "Ch " + channel;
+}
+
+function dbToAmplitudeRatio(value) {
+  const numericValue = Number(value);
+
+  if (!Number.isFinite(numericValue)) {
+    return Number.NaN;
+  }
+
+  return Math.pow(10, numericValue / 20);
+}
+
+function readCssVariable(name, fallback) {
+  const resolved = window.getComputedStyle(document.body).getPropertyValue(name).trim();
+  return resolved || fallback;
+}
+
+function readStoredTheme() {
+  try {
+    const storedTheme = window.localStorage.getItem(THEME_STORAGE_KEY);
+    return storedTheme === "light" || storedTheme === "dark" ? storedTheme : "dark";
+  } catch (error) {
+    return "dark";
+  }
+}
+
+function applyTheme(theme) {
+  uiState.theme = theme === "light" ? "light" : "dark";
+  document.body.dataset.theme = uiState.theme;
+
+  if (themeElements.toggleButton) {
+    const nextLabel = uiState.theme === "dark" ? "Light Mode" : "Dark Mode";
+    themeElements.toggleButton.textContent = nextLabel;
+    themeElements.toggleButton.setAttribute("aria-label", "Switch to " + nextLabel.toLowerCase());
+    themeElements.toggleButton.setAttribute("aria-pressed", String(uiState.theme === "light"));
+  }
+
+  try {
+    window.localStorage.setItem(THEME_STORAGE_KEY, uiState.theme);
+  } catch (error) {
+    // Ignore storage failures and keep the in-memory theme.
+  }
+
+  if (analyserState.dataset) {
+    renderPlotGrid(analyserState.dataset);
+  }
 }
 
 function setBanner(element, kind, message) {
@@ -428,11 +494,26 @@ function renderAnalyserEmpty(message) {
   analyserElements.measurementUpdatedAt.textContent = MISSING;
   analyserElements.testFolderList.replaceChildren();
   analyserElements.plotGridContainer.replaceChildren();
+  updatePlotModeUi();
 
   const empty = document.createElement("div");
   empty.className = "plot-grid-empty";
   empty.textContent = message;
   analyserElements.plotGridContainer.append(empty);
+}
+
+function getPlotModeDescription() {
+  return analyserState.plotDisplayMode === PLOT_DISPLAY_MODES.E_OVER_EMAX
+    ? "Hover to inspect values. Click a chart to pin the readout. Each plot normalises its overlaid channels to that plot's strongest point in E/Emax form, with dB guide circles from -3 dB to -20 dB."
+    : "Hover to inspect values. Click a chart to pin the readout. All channels are normalised to the strongest dBm measured anywhere in the selected set.";
+}
+
+function updatePlotModeUi() {
+  analyserElements.plotModeDescription.textContent = getPlotModeDescription();
+
+  for (const button of analyserElements.plotModeButtons) {
+    button.classList.toggle("is-active", button.dataset.plotMode === analyserState.plotDisplayMode);
+  }
 }
 
 function renderAnalyserData(data) {
@@ -443,6 +524,7 @@ function renderAnalyserData(data) {
   analyserElements.testCountValue.textContent = String(data.folders.length);
   analyserElements.measurementUpdatedAt.textContent = "Updated " + formatLocalDateTime(data.updated_at);
 
+  updatePlotModeUi();
   renderFolderList(data.folders);
   renderPlotGrid(data);
 }
@@ -498,6 +580,86 @@ function plotKey(polarisation, orientation) {
   return polarisation + "::" + orientation;
 }
 
+function getPlotPeakDbm(series) {
+  const peaks = series
+    .flatMap((entry) => entry.points.map((point) => Number(point.rx_peak_dbm)))
+    .filter((value) => Number.isFinite(value));
+
+  return peaks.length ? Math.max(...peaks) : Number.NaN;
+}
+
+function buildDbRingTicks(minValue) {
+  const lowerBound = Number(minValue);
+
+  if (!Number.isFinite(lowerBound)) {
+    return [];
+  }
+
+  const preferredTicks = [0, -3, -6, -10, -20, -30, -40, -50, -60, -80, -100];
+  const ticks = preferredTicks.filter((value) => value <= 0 && value >= lowerBound).sort((left, right) => left - right);
+
+  if (!ticks.length || ticks[0] !== lowerBound) {
+    ticks.unshift(lowerBound);
+  }
+
+  if (ticks[ticks.length - 1] !== 0) {
+    ticks.push(0);
+  }
+
+  return ticks.map((tick) => ({
+    value: tick,
+    label: tick === 0 ? "" : tick.toFixed(0) + " dB",
+    className: tick === 0 ? "polar-outer-ring" : tick === -3 ? "polar-reference" : "polar-ring"
+  }));
+}
+
+function buildEOverEmaxRingTicks() {
+  return [
+    ...E_OVER_EMAX_DB_GUIDES.map((guideDb) => ({
+      value: dbToAmplitudeRatio(guideDb),
+      label: guideDb.toFixed(0) + " dB",
+      className: guideDb === -3 ? "polar-reference" : "polar-ring"
+    })),
+    {
+      value: 1,
+      label: "",
+      className: "polar-outer-ring"
+    }
+  ];
+}
+
+function prepareSeriesForPlot(series, dataset, mode) {
+  const plotPeakDbm = getPlotPeakDbm(series);
+  const globalPeakDbm = Number(dataset.global_peak_dbm);
+
+  return {
+    plotPeakDbm,
+    globalPeakDbm,
+    yMin: mode === PLOT_DISPLAY_MODES.E_OVER_EMAX ? 0 : Number(dataset.y_range.min),
+    yMax: mode === PLOT_DISPLAY_MODES.E_OVER_EMAX ? 1 : 0,
+    yLabel: mode === PLOT_DISPLAY_MODES.E_OVER_EMAX ? "E/Emax (per plot, dB guides)" : "Relative To Global Peak (dB)",
+    ringTicks: mode === PLOT_DISPLAY_MODES.E_OVER_EMAX ? buildEOverEmaxRingTicks() : buildDbRingTicks(Number(dataset.y_range.min)),
+    series: series.map((entry) => ({
+      ...entry,
+      peak_e_over_emax: dbToAmplitudeRatio(Number(entry.peak_dbm) - plotPeakDbm),
+      points: entry.points
+        .map((point) => {
+          const rxPeakDbm = Number(point.rx_peak_dbm);
+          const normalisedDb = Number(point.normalised_db);
+          const relativeToPlotDb = rxPeakDbm - plotPeakDbm;
+          return {
+            angle_deg: Number(point.angle_deg),
+            rx_peak_dbm: rxPeakDbm,
+            normalised_db: normalisedDb,
+            e_over_emax: dbToAmplitudeRatio(relativeToPlotDb),
+            display_value: mode === PLOT_DISPLAY_MODES.E_OVER_EMAX ? dbToAmplitudeRatio(relativeToPlotDb) : normalisedDb
+          };
+        })
+        .sort((left, right) => left.angle_deg - right.angle_deg)
+    }))
+  };
+}
+
 function renderPlotGrid(data) {
   analyserElements.plotGridContainer.replaceChildren();
 
@@ -534,14 +696,14 @@ function renderPlotGrid(data) {
 
     for (const column of data.columns) {
       const plot = plotMap.get(plotKey(row, column));
-      grid.append(createPlotCard(plot, row, column, data));
+      grid.append(createPlotCard(plot, row, column, data, analyserState.plotDisplayMode));
     }
   }
 
   analyserElements.plotGridContainer.append(grid);
 }
 
-function createPlotCard(plot, row, column, dataset) {
+function createPlotCard(plot, row, column, dataset, mode) {
   if (!plot || !plot.series.length) {
     const empty = document.createElement("div");
     empty.className = "plot-card";
@@ -574,30 +736,33 @@ function createPlotCard(plot, row, column, dataset) {
   const readout = document.createElement("div");
   readout.className = "plot-readout";
 
-  const series = sortSeries(plot.series).map((entry, index) => ({
+  const colorisedSeries = sortSeries(plot.series).map((entry, index) => ({
     ...entry,
     color: CHANNEL_COLORS[index % CHANNEL_COLORS.length]
   }));
+  const preparedPlot = prepareSeriesForPlot(colorisedSeries, dataset, mode);
 
-  updatePlotReadout(readout, null, [], false);
+  updatePlotReadout(readout, null, [], false, mode);
 
-  const svg = createPlotSvg(series, dataset, readout, row, column);
-  const legend = createPlotLegend(series, dataset.global_peak_dbm);
+  const svg = createPlotSvg(preparedPlot, readout, row, column, mode);
+  const legend = createPlotLegend(preparedPlot, mode);
 
   card.append(header, readout, svg, legend);
   return card;
 }
 
-function createPlotLegend(series, globalPeakDbm) {
+function createPlotLegend(preparedPlot, mode) {
   const legend = document.createElement("div");
   legend.className = "plot-legend";
 
   const reference = document.createElement("div");
   reference.className = "legend-reference";
-  reference.textContent = "Ref peak " + formatDbm(globalPeakDbm);
+  reference.textContent = mode === PLOT_DISPLAY_MODES.E_OVER_EMAX
+    ? "Plot max " + formatDbm(preparedPlot.plotPeakDbm)
+    : "Ref peak " + formatDbm(preparedPlot.globalPeakDbm);
   legend.append(reference);
 
-  for (const entry of series) {
+  for (const entry of preparedPlot.series) {
     const item = document.createElement("div");
     item.className = "legend-item";
 
@@ -606,7 +771,9 @@ function createPlotLegend(series, globalPeakDbm) {
     swatch.style.background = entry.color;
 
     const text = document.createElement("span");
-    text.textContent = formatChannelLabel(entry.channel) + " peak " + formatDbm(entry.peak_dbm) + " (" + formatSignedDb(entry.peak_offset_db) + ")";
+    text.textContent = mode === PLOT_DISPLAY_MODES.E_OVER_EMAX
+      ? formatChannelLabel(entry.channel) + " peak " + formatEOverEmax(entry.peak_e_over_emax) + " | " + formatDbm(entry.peak_dbm)
+      : formatChannelLabel(entry.channel) + " peak " + formatDbm(entry.peak_dbm) + " (" + formatSignedDb(entry.peak_offset_db) + ")";
 
     item.append(swatch, text);
     legend.append(item);
@@ -625,25 +792,6 @@ function createSvgElement(name, attributes = {}) {
   }
 
   return element;
-}
-
-function buildTicks(minValue, maxValue, count) {
-  if (!Number.isFinite(minValue) || !Number.isFinite(maxValue)) {
-    return [];
-  }
-
-  if (minValue === maxValue) {
-    return [minValue];
-  }
-
-  const ticks = [];
-  const step = (maxValue - minValue) / Math.max(count - 1, 1);
-
-  for (let index = 0; index < count; index += 1) {
-    ticks.push(minValue + step * index);
-  }
-
-  return ticks;
 }
 
 function findNearestNumber(sortedValues, target) {
@@ -665,7 +813,7 @@ function findNearestNumber(sortedValues, target) {
   return nearest;
 }
 
-function updatePlotReadout(container, angle, rows, pinned) {
+function updatePlotReadout(container, angle, rows, pinned, mode) {
   container.replaceChildren();
 
   if (angle === null || !rows.length) {
@@ -695,23 +843,27 @@ function updatePlotReadout(container, angle, rows, pinned) {
     swatch.style.background = row.color;
 
     const text = document.createElement("span");
-    text.textContent = formatChannelLabel(row.channel) + ": " + formatDb(row.normalised_db) + " | " + formatDbm(row.rx_peak_dbm);
+    text.textContent = mode === PLOT_DISPLAY_MODES.E_OVER_EMAX
+      ? formatChannelLabel(row.channel) + ": " + formatEOverEmax(row.e_over_emax) + " | " + formatDbm(row.rx_peak_dbm)
+      : formatChannelLabel(row.channel) + ": " + formatDb(row.normalised_db) + " | " + formatDbm(row.rx_peak_dbm);
 
     line.append(swatch, text);
     container.append(line);
   }
 }
 
-function createPlotSvg(series, dataset, readout, row, column) {
+function createPlotSvg(preparedPlot, readout, row, column, mode) {
   const width = 360;
-  const height = 250;
-  const margin = { top: 18, right: 14, bottom: 38, left: 54 };
-  const chartWidth = width - margin.left - margin.right;
-  const chartHeight = height - margin.top - margin.bottom;
-  const xMin = Number(dataset.x_range.min);
-  const xMax = Number(dataset.x_range.max);
-  const yMin = Number(dataset.y_range.min);
-  const yMax = Number(dataset.y_range.max);
+  const height = 320;
+  const centerX = width / 2;
+  const centerY = 150;
+  const radius = 118;
+  const yMin = Number(preparedPlot.yMin);
+  const yMax = Number(preparedPlot.yMax);
+  const angleLabels = [0, 45, 90, 135, 180, 225, 270, 315];
+  const sampleAngles = Array.from(new Set(preparedPlot.series.flatMap((entry) => entry.points.map((point) => Number(point.angle_deg)))))
+    .filter((value) => Number.isFinite(value))
+    .sort((left, right) => left - right);
 
   const svg = createSvgElement("svg", {
     class: "plot-svg",
@@ -719,120 +871,163 @@ function createPlotSvg(series, dataset, readout, row, column) {
     role: "img",
     "aria-label": `Plot for polarisation ${row} and orientation ${column}`
   });
+  const svgPalette = {
+    paperFill: readCssVariable("--plot-paper-fill", "#ffffff"),
+    paperStroke: readCssVariable("--plot-paper-stroke", "rgba(17, 32, 51, 0.12)"),
+    gridStroke: readCssVariable("--plot-grid-stroke", "rgba(60, 72, 88, 0.34)"),
+    axisStroke: readCssVariable("--plot-axis-stroke", "rgba(60, 72, 88, 0.56)"),
+    referenceStroke: readCssVariable("--plot-reference-stroke", "rgba(60, 72, 88, 0.74)"),
+    labelFill: readCssVariable("--plot-label", "#425466"),
+    crosshairStroke: readCssVariable("--crosshair-stroke", "rgba(60, 72, 88, 0.68)"),
+    hoverMarkerStroke: readCssVariable("--hover-marker-stroke", "rgba(4, 7, 12, 0.95)")
+  };
 
-  const xScale = (value) => margin.left + ((value - xMin) / (xMax - xMin || 1)) * chartWidth;
-  const yScale = (value) => margin.top + ((yMax - value) / (yMax - yMin || 1)) * chartHeight;
-  const sampleAngles = Array.from(new Set(series.flatMap((entry) => entry.points.map((point) => Number(point.angle_deg)))))
-    .filter((value) => Number.isFinite(value))
-    .sort((left, right) => left - right);
+  svg.append(createSvgElement("rect", {
+    class: "polar-paper",
+    x: 6,
+    y: 6,
+    width: width - 12,
+    height: height - 12,
+    rx: 18,
+    ry: 18,
+    fill: svgPalette.paperFill,
+    stroke: svgPalette.paperStroke,
+    "stroke-width": 1
+  }));
 
-  const xTicks = buildTicks(xMin, xMax, 7);
-  const yTicks = buildTicks(yMin, yMax, 6);
+  const radialScale = (value) => {
+    const numericValue = Number(value);
 
-  for (const tick of yTicks) {
-    const y = yScale(tick);
+    if (!Number.isFinite(numericValue)) {
+      return 0;
+    }
+
+    if (mode === PLOT_DISPLAY_MODES.E_OVER_EMAX) {
+      return radius * Math.max(0, Math.min(1, numericValue));
+    }
+
+    return radius * ((numericValue - yMin) / (yMax - yMin || 1));
+  };
+
+  const polarToCartesian = (angleDeg, value) => {
+    const angleRadians = (Number(angleDeg) * Math.PI) / 180;
+    const radialDistance = radialScale(value);
+    return {
+      x: centerX + radialDistance * Math.sin(angleRadians),
+      y: centerY - radialDistance * Math.cos(angleRadians)
+    };
+  };
+
+  for (const angle of angleLabels) {
+    const spokeEnd = polarToCartesian(angle, yMax);
     svg.append(createSvgElement("line", {
-      class: "grid-line",
-      x1: margin.left,
-      y1: y,
-      x2: margin.left + chartWidth,
-      y2: y
+      class: "polar-spoke",
+      x1: centerX,
+      y1: centerY,
+      x2: spokeEnd.x,
+      y2: spokeEnd.y,
+      stroke: svgPalette.gridStroke,
+      "stroke-width": 1.1
+    }));
+  }
+
+  for (const tick of preparedPlot.ringTicks) {
+    const ringStroke = tick.className === "polar-reference"
+      ? svgPalette.referenceStroke
+      : tick.className === "polar-outer-ring"
+        ? svgPalette.axisStroke
+        : svgPalette.gridStroke;
+    const ringDash = tick.className === "polar-reference"
+      ? "3 5"
+      : tick.className === "polar-ring"
+        ? "5 6"
+        : null;
+    const ringRadius = radialScale(tick.value);
+    svg.append(createSvgElement("circle", {
+      class: tick.className,
+      cx: centerX,
+      cy: centerY,
+      r: ringRadius,
+      fill: "none",
+      stroke: ringStroke,
+      "stroke-width": tick.className === "polar-outer-ring" ? 1.6 : 1.1,
+      "stroke-dasharray": ringDash
     }));
 
+    if (!tick.label) {
+      continue;
+    }
+
     const label = createSvgElement("text", {
-      class: "tick-label",
-      x: margin.left - 8,
-      y: y + 4,
-      "text-anchor": "end"
+      class: "polar-label",
+      x: centerX + 8,
+      y: centerY - ringRadius - 6,
+      fill: svgPalette.labelFill,
+      "font-size": "11.5px",
+      "font-weight": 700,
+      "font-family": "Bahnschrift, Aptos, Segoe UI, sans-serif"
     });
-    label.textContent = tick.toFixed(0);
+    label.textContent = tick.label;
     svg.append(label);
   }
 
-  for (const tick of xTicks) {
-    const x = xScale(tick);
-    svg.append(createSvgElement("line", {
-      class: "grid-line",
-      x1: x,
-      y1: margin.top,
-      x2: x,
-      y2: margin.top + chartHeight
-    }));
-
+  for (const angle of angleLabels) {
+    const angleRadians = (angle * Math.PI) / 180;
+    const labelRadius = radius + 16;
     const label = createSvgElement("text", {
-      class: "tick-label",
-      x,
-      y: margin.top + chartHeight + 18,
-      "text-anchor": "middle"
+      class: "polar-angle-label",
+      x: centerX + labelRadius * Math.sin(angleRadians),
+      y: centerY - labelRadius * Math.cos(angleRadians) + 4,
+      "text-anchor": "middle",
+      fill: svgPalette.labelFill,
+      "font-size": "10.5px",
+      "font-weight": 700,
+      "font-family": "Bahnschrift, Aptos, Segoe UI, sans-serif"
     });
-    label.textContent = tick.toFixed(0);
+    label.textContent = angle + "\u00b0";
     svg.append(label);
   }
 
-  svg.append(createSvgElement("line", {
-    class: "axis-line",
-    x1: margin.left,
-    y1: margin.top + chartHeight,
-    x2: margin.left + chartWidth,
-    y2: margin.top + chartHeight
-  }));
-
-  svg.append(createSvgElement("line", {
-    class: "axis-line",
-    x1: margin.left,
-    y1: margin.top,
-    x2: margin.left,
-    y2: margin.top + chartHeight
-  }));
-
-  const xAxisLabel = createSvgElement("text", {
-    class: "axis-label",
-    x: margin.left + chartWidth / 2,
-    y: height - 8,
-    "text-anchor": "middle"
+  const axisLabel = createSvgElement("text", {
+    class: "polar-label",
+    x: centerX,
+    y: height - 12,
+    "text-anchor": "middle",
+    fill: svgPalette.labelFill,
+    "font-size": "11.5px",
+    "font-weight": 700,
+    "font-family": "Bahnschrift, Aptos, Segoe UI, sans-serif"
   });
-  xAxisLabel.textContent = "Azimuth (deg)";
-  svg.append(xAxisLabel);
+  axisLabel.textContent = preparedPlot.yLabel;
+  svg.append(axisLabel);
 
-  const yAxisLabel = createSvgElement("text", {
-    class: "axis-label",
-    x: 14,
-    y: margin.top + chartHeight / 2,
-    transform: `rotate(-90 14 ${margin.top + chartHeight / 2})`,
-    "text-anchor": "middle"
-  });
-  yAxisLabel.textContent = "Relative To Global Peak (dB)";
-  svg.append(yAxisLabel);
-
-  for (const entry of series) {
-    const points = [...entry.points]
-      .map((point) => ({
-        angle_deg: Number(point.angle_deg),
-        rx_peak_dbm: Number(point.rx_peak_dbm),
-        normalised_db: Number(point.normalised_db)
-      }))
-      .sort((left, right) => left.angle_deg - right.angle_deg);
-
-    const commands = points.map((point, index) => {
-      const x = xScale(point.angle_deg);
-      const y = yScale(point.normalised_db);
-      return (index === 0 ? "M" : "L") + x.toFixed(2) + " " + y.toFixed(2);
+  for (const entry of preparedPlot.series) {
+    const commands = entry.points.map((point, index) => {
+      const position = polarToCartesian(point.angle_deg, point.display_value);
+      return (index === 0 ? "M" : "L") + position.x.toFixed(2) + " " + position.y.toFixed(2);
     });
 
     svg.append(createSvgElement("path", {
       class: "series-line",
       d: commands.join(" "),
-      stroke: entry.color
+      fill: "none",
+      stroke: entry.color,
+      "stroke-width": 2.8,
+      "stroke-linecap": "round",
+      "stroke-linejoin": "round"
     }));
   }
 
   const crosshair = createSvgElement("line", {
     class: "crosshair",
-    x1: margin.left,
-    y1: margin.top,
-    x2: margin.left,
-    y2: margin.top + chartHeight,
-    visibility: "hidden"
+    x1: centerX,
+    y1: centerY,
+    x2: centerX,
+    y2: centerY - radius,
+    visibility: "hidden",
+    stroke: svgPalette.crosshairStroke,
+    "stroke-width": 1.2,
+    "stroke-dasharray": "4 4"
   });
   svg.append(crosshair);
 
@@ -840,10 +1035,10 @@ function createPlotSvg(series, dataset, readout, row, column) {
   svg.append(markerLayer);
 
   const overlay = createSvgElement("rect", {
-    x: margin.left,
-    y: margin.top,
-    width: chartWidth,
-    height: chartHeight,
+    x: 0,
+    y: 0,
+    width,
+    height,
     fill: "transparent"
   });
   overlay.style.cursor = "crosshair";
@@ -854,7 +1049,7 @@ function createPlotSvg(series, dataset, readout, row, column) {
   function clearHover() {
     crosshair.setAttribute("visibility", "hidden");
     markerLayer.replaceChildren();
-    updatePlotReadout(readout, null, [], false);
+    updatePlotReadout(readout, null, [], false, mode);
   }
 
   function renderHover(angle, pinState) {
@@ -865,25 +1060,31 @@ function createPlotSvg(series, dataset, readout, row, column) {
       return;
     }
 
+    const crosshairEnd = polarToCartesian(nearestAngle, yMax);
     const rows = [];
     markerLayer.replaceChildren();
     crosshair.setAttribute("visibility", "visible");
-    crosshair.setAttribute("x1", xScale(nearestAngle));
-    crosshair.setAttribute("x2", xScale(nearestAngle));
+    crosshair.setAttribute("x1", centerX);
+    crosshair.setAttribute("y1", centerY);
+    crosshair.setAttribute("x2", crosshairEnd.x);
+    crosshair.setAttribute("y2", crosshairEnd.y);
 
-    for (const entry of series) {
+    for (const entry of preparedPlot.series) {
       const point = entry.points.find((candidate) => Number(candidate.angle_deg) === nearestAngle);
 
       if (!point) {
         continue;
       }
 
+      const markerPoint = polarToCartesian(nearestAngle, point.display_value);
       const marker = createSvgElement("circle", {
         class: "hover-marker",
-        cx: xScale(nearestAngle),
-        cy: yScale(Number(point.normalised_db)),
+        cx: markerPoint.x,
+        cy: markerPoint.y,
         r: 4,
-        fill: entry.color
+        fill: entry.color,
+        stroke: svgPalette.hoverMarkerStroke,
+        "stroke-width": 1.5
       });
 
       markerLayer.append(marker);
@@ -891,18 +1092,21 @@ function createPlotSvg(series, dataset, readout, row, column) {
         channel: entry.channel,
         color: entry.color,
         normalised_db: Number(point.normalised_db),
+        e_over_emax: Number(point.e_over_emax),
         rx_peak_dbm: Number(point.rx_peak_dbm)
       });
     }
 
-    updatePlotReadout(readout, nearestAngle, rows, pinState);
+    updatePlotReadout(readout, nearestAngle, rows, pinState, mode);
   }
 
   function eventToAngle(event) {
-    const bounds = overlay.getBoundingClientRect();
-    const x = Math.max(0, Math.min(bounds.width, event.clientX - bounds.left));
-    const ratio = bounds.width === 0 ? 0 : x / bounds.width;
-    return xMin + ratio * (xMax - xMin);
+    const bounds = svg.getBoundingClientRect();
+    const svgX = ((event.clientX - bounds.left) / (bounds.width || 1)) * width;
+    const svgY = ((event.clientY - bounds.top) / (bounds.height || 1)) * height;
+    const dx = svgX - centerX;
+    const dy = svgY - centerY;
+    return (Math.atan2(dx, -dy) * 180 / Math.PI + 360) % 360;
   }
 
   overlay.addEventListener("pointermove", (event) => {
@@ -945,10 +1149,40 @@ function bindAnalyserControls() {
     await loadMeasurementList();
     renderYamlPicker();
   });
+
+  for (const button of analyserElements.plotModeButtons) {
+    button.addEventListener("click", () => {
+      const nextMode = button.dataset.plotMode;
+
+      if (!nextMode || nextMode === analyserState.plotDisplayMode) {
+        return;
+      }
+
+      analyserState.plotDisplayMode = nextMode;
+      updatePlotModeUi();
+
+      if (analyserState.dataset) {
+        renderPlotGrid(analyserState.dataset);
+      }
+    });
+  }
+}
+
+function bindThemeControls() {
+  if (!themeElements.toggleButton) {
+    return;
+  }
+
+  themeElements.toggleButton.addEventListener("click", () => {
+    applyTheme(uiState.theme === "dark" ? "light" : "dark");
+  });
 }
 
 bindRoutes();
 bindAnalyserControls();
+bindThemeControls();
+applyTheme(readStoredTheme());
+updatePlotModeUi();
 renderRoute();
 refreshMeasurementData();
 window.setInterval(refreshMeasurementData, REFRESH_MS);
