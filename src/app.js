@@ -153,6 +153,11 @@ function formatDb(value) {
   return Number.isFinite(numericValue) ? numericValue.toFixed(2) + " dB" : MISSING;
 }
 
+function formatDbd(value) {
+  const numericValue = Number(value);
+  return Number.isFinite(numericValue) ? numericValue.toFixed(2) + " dBd" : MISSING;
+}
+
 function formatSignedDb(value) {
   const numericValue = Number(value);
   if (!Number.isFinite(numericValue)) {
@@ -215,6 +220,37 @@ function formatPolarisationLabel(value) {
 function getChannelColor(channel, index) {
   const key = channel === null || channel === undefined ? "" : String(channel).trim();
   return FIXED_CHANNEL_COLORS.get(key) || CHANNEL_COLORS[index % CHANNEL_COLORS.length];
+}
+
+function formatYamlSummaryValue(value) {
+  if (value === null || value === undefined || value === "") {
+    return MISSING;
+  }
+
+  return String(value);
+}
+
+function buildAnalyserSubtitle(data) {
+  return [
+    'DUT_product: "' + formatYamlSummaryValue(data.dut_product) + '"',
+    'DUT_serial_number: "' + formatYamlSummaryValue(data.dut_serial_number) + '"',
+    'foldername_comment: "' + formatYamlSummaryValue(data.foldername_comment) + '"'
+  ].join("\n");
+}
+
+function buildTestFolderSummary(data) {
+  const folders = Array.isArray(data.folders) ? data.folders : [];
+  const channelCount = new Set(
+    folders
+      .map((folder) => folder && folder.channel)
+      .filter((channel) => channel !== null && channel !== undefined && channel !== "")
+      .map((channel) => String(channel).trim())
+  ).size;
+
+  return "Folders/tests = " + String(folders.length)
+    + "  " + String(Array.isArray(data.rows) ? data.rows.length : 0) + " Pol"
+    + "  " + String(Array.isArray(data.columns) ? data.columns.length : 0) + " Ori"
+    + "  " + String(channelCount) + " ch";
 }
 
 function dbToAmplitudeRatio(value) {
@@ -549,12 +585,12 @@ function updatePlotModeUi() {
 }
 
 function renderAnalyserData(data) {
-  analyserElements.subtitle.textContent = data.measurement_name + " | " + data.columns.length + " orientation column(s) | " + data.rows.length + " polarisation row(s)";
+  analyserElements.subtitle.textContent = buildAnalyserSubtitle(data);
   analyserElements.selectedYamlPath.textContent = data.yaml_relative_path || MISSING;
   analyserElements.selectedMeasurementName.textContent = data.measurement_name || MISSING;
   analyserElements.globalPeakValue.textContent = formatDbm(data.global_peak_dbm);
   analyserElements.testCountValue.textContent = String(data.folders.length);
-  analyserElements.testFolderSummaryText.textContent = "Folders/tests = " + String(data.folders.length);
+  analyserElements.testFolderSummaryText.textContent = buildTestFolderSummary(data);
   analyserElements.measurementUpdatedAt.textContent = "Updated " + formatLocalDateTime(data.updated_at);
 
   updatePlotModeUi();
@@ -707,7 +743,7 @@ function renderPlotGrid(data) {
   const plotMap = new Map(data.plots.map((plot) => [plotKey(plot.polarisation, plot.orientation), plot]));
   const grid = document.createElement("div");
   grid.className = "plot-grid";
-  grid.style.gridTemplateColumns = `4.5rem repeat(${data.rows.length}, minmax(0, 1fr))`;
+  grid.style.gridTemplateColumns = `10.75rem repeat(${data.rows.length}, minmax(0, 1fr))`;
 
   const corner = document.createElement("div");
   corner.className = "plot-grid-corner";
@@ -724,7 +760,26 @@ function renderPlotGrid(data) {
   for (const row of data.columns) {
     const rowHeader = document.createElement("div");
     rowHeader.className = "plot-grid-row-header";
-    rowHeader.textContent = row;
+
+    const rowImageUrl = data.orientation_images && data.orientation_images[row];
+    if (rowImageUrl) {
+      const rowImage = document.createElement("img");
+      rowImage.className = "plot-grid-row-photo";
+      rowImage.src = rowImageUrl;
+      rowImage.alt = row + " orientation";
+      rowImage.loading = "lazy";
+      rowImage.decoding = "async";
+      rowImage.addEventListener("error", () => {
+        rowImage.remove();
+      });
+      rowHeader.append(rowImage);
+    }
+
+    const rowLabel = document.createElement("div");
+    rowLabel.className = "plot-grid-row-label";
+    rowLabel.textContent = row;
+    rowHeader.append(rowLabel);
+
     grid.append(rowHeader);
 
     for (const column of data.rows) {
@@ -791,12 +846,25 @@ function createPlotLegend(preparedPlot, mode) {
     swatch.className = "swatch";
     swatch.style.background = entry.color;
 
-    const text = document.createElement("span");
-    text.textContent = mode === PLOT_DISPLAY_MODES.E_OVER_EMAX
-      ? formatChannelLabel(entry.channel) + " " + formatEOverEmax(entry.peak_e_over_emax) + " | " + formatDbm(entry.peak_dbm)
-      : formatChannelLabel(entry.channel) + " " + formatDbm(entry.peak_dbm) + " | " + formatSignedDb(entry.peak_offset_db);
+    const primary = document.createElement("div");
+    primary.className = "legend-primary";
+    const parts = [
+      mode === PLOT_DISPLAY_MODES.E_OVER_EMAX
+        ? formatChannelLabel(entry.channel) + " " + formatEOverEmax(entry.peak_e_over_emax)
+        : formatChannelLabel(entry.channel) + " " + formatDbm(entry.peak_dbm),
+      mode === PLOT_DISPLAY_MODES.E_OVER_EMAX
+        ? formatDbm(entry.peak_dbm)
+        : formatSignedDb(entry.peak_offset_db)
+    ];
+    if (entry.eirp_dbm !== null && entry.eirp_dbm !== undefined) {
+      parts.push("EIRP " + formatDbm(entry.eirp_dbm));
+    }
+    if (entry.gain_dbd !== null && entry.gain_dbd !== undefined) {
+      parts.push(formatDbd(entry.gain_dbd));
+    }
+    primary.textContent = parts.join(" | ");
 
-    item.append(swatch, text);
+    item.append(swatch, primary);
     legend.append(item);
   }
 
@@ -865,7 +933,7 @@ function updatePlotReadout(container, angle, rows, pinned, mode) {
 }
 
 function createPlotSvg(preparedPlot, readout, row, column, mode) {
-  const width = 360;
+  const width = 336;
   const height = 320;
   const centerX = width / 2;
   const centerY = 150;

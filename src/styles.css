@@ -274,6 +274,7 @@ textarea {
 
 .hero-subtitle-compact {
   max-width: 62rem;
+  white-space: pre-line;
 }
 
 .button {
@@ -630,12 +631,11 @@ textarea {
 }
 
 .plot-grid-row-header {
-  writing-mode: vertical-rl;
-  transform: rotate(180deg);
-  letter-spacing: 0.03em;
-  text-transform: uppercase;
-  font-size: 1.05rem;
-  font-weight: 900;
+  padding: 0.55rem 0.4rem;
+  display: grid;
+  gap: 0.55rem;
+  align-content: center;
+  justify-items: center;
 }
 
 .plot-card {
@@ -779,12 +779,45 @@ textarea {
   color: var(--muted-strong);
   font-size: 0.88rem;
   line-height: 1.2;
-  white-space: nowrap;
   text-align: left;
 }
 
 .legend-reference {
   border-color: rgba(255, 178, 102, 0.28);
+}
+
+.legend-copy {
+  display: grid;
+  gap: 0.05rem;
+  min-width: 0;
+}
+
+.legend-primary,
+.legend-secondary {
+  white-space: nowrap;
+}
+
+.legend-secondary {
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.plot-grid-row-photo {
+  width: min(100%, 7.15rem);
+  max-width: 100%;
+  aspect-ratio: 1;
+  object-fit: cover;
+  border-radius: 0.85rem;
+  border: 1px solid var(--border);
+  background: var(--panel-strong);
+}
+
+.plot-grid-row-label {
+  font-size: 1.12rem;
+  font-weight: 900;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  line-height: 1;
 }
 
 .plot-empty,
