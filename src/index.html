@@ -3,550 +3,192 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>DAMSpy WOYM Monitor</title>
-  <style>
-    :root {
-      --bg: #05070a;
-      --panel: #0d1218;
-      --panel-strong: #121a22;
-      --text: #f5f7fa;
-      --muted: #a9b6c5;
-      --accent: #5fd1ff;
-      --warning-bg: #3a160f;
-      --warning-text: #ffd6c7;
-      --danger-bg: #3c1111;
-      --danger-text: #ffd8d8;
-      --border: rgba(255, 255, 255, 0.08);
-    }
-
-    * {
-      box-sizing: border-box;
-    }
-
-    html,
-    body {
-      margin: 0;
-      min-height: 100%;
-      width: 100%;
-      background: radial-gradient(circle at top, #101923 0%, var(--bg) 55%);
-      color: var(--text);
-      font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
-    }
-
-    body {
-      width: 100vw;
-      min-height: 100vh;
-    }
-
-    .screen {
-      min-height: 100vh;
-      width: 100vw;
-      padding: 2.25rem;
-      display: flex;
-      flex-direction: column;
-      gap: 1.5rem;
-    }
-
-    .banner {
-      display: none;
-      padding: 1rem 1.25rem;
-      border-radius: 1rem;
-      border: 1px solid transparent;
-      font-size: 1.2rem;
-      font-weight: 700;
-      letter-spacing: 0.03em;
-    }
-
-    .banner.visible {
-      display: block;
-    }
-
-    .banner.warning {
-      background: var(--warning-bg);
-      color: var(--warning-text);
-      border-color: rgba(255, 214, 199, 0.25);
-    }
-
-    .banner.error {
-      background: var(--danger-bg);
-      color: var(--danger-text);
-      border-color: rgba(255, 216, 216, 0.25);
-    }
-
-    .hero,
-    .panel {
-      border: 1px solid var(--border);
-      border-radius: 1.5rem;
-      background: rgba(13, 18, 24, 0.9);
-      box-shadow: 0 18px 45px rgba(0, 0, 0, 0.25);
-    }
-
-    .hero {
-      padding: 2rem 2.25rem;
-      display: grid;
-      gap: 0.75rem;
-    }
-
-    .eyebrow {
-      color: var(--accent);
-      font-size: 1.2rem;
-      font-weight: 800;
-      letter-spacing: 0.14em;
-      text-transform: uppercase;
-    }
-
-    .hero-title {
-      margin: 0;
-      font-size: clamp(2.6rem, 5vw, 5rem);
-      line-height: 1.05;
-      font-weight: 800;
-    }
-
-    .hero-subtitle {
-      margin: 0;
-      color: var(--muted);
-      font-size: clamp(2rem, 4vw, 3.6rem);
-      line-height: 1.1;
-      font-weight: 700;
-    }
-
-    .main-grid {
-      display: grid;
-      gap: 1.5rem;
-      grid-template-columns: 2fr 1fr;
-      flex: 1;
-      min-height: 0;
-    }
-
-    .left-column,
-    .right-column {
-      display: grid;
-      gap: 1.5rem;
-      align-content: start;
-    }
-
-    .panel {
-      padding: 1.5rem 1.75rem;
-    }
-
-    .status-panel {
-      background: rgba(18, 26, 34, 0.95);
-    }
-
-    .operator-panel {
-      background: rgba(37, 21, 10, 0.95);
-      border-color: rgba(95, 209, 255, 0.18);
-      display: none;
-    }
-
-    .operator-panel.visible {
-      display: block;
-    }
-
-    .section-label {
-      margin: 0 0 0.9rem;
-      color: var(--accent);
-      font-size: 1rem;
-      font-weight: 800;
-      letter-spacing: 0.14em;
-      text-transform: uppercase;
-    }
-
-    .status-state,
-    .operator-title {
-      margin: 0;
-      font-size: clamp(2.1rem, 4vw, 4rem);
-      line-height: 1.05;
-      font-weight: 800;
-    }
-
-    .status-message,
-    .operator-message {
-      margin: 0.6rem 0 0;
-      color: var(--muted);
-      font-size: clamp(1.35rem, 2.2vw, 2.2rem);
-      line-height: 1.25;
-      font-weight: 600;
-    }
-
-    .operator-message {
-      color: var(--text);
-    }
-
-    .progress-grid,
-    .meta-grid {
-      display: grid;
-      gap: 1rem;
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-    }
-
-    .metric,
-    .meta-item {
-      padding: 1rem 1.1rem;
-      border-radius: 1rem;
-      background: rgba(255, 255, 255, 0.03);
-      border: 1px solid var(--border);
-    }
-
-    .metric-label,
-    .meta-label {
-      display: block;
-      color: var(--accent);
-      font-size: 0.95rem;
-      font-weight: 800;
-      letter-spacing: 0.12em;
-      text-transform: uppercase;
-      margin-bottom: 0.5rem;
-    }
-
-    .metric-value {
-      font-size: clamp(1.8rem, 3vw, 2.9rem);
-      line-height: 1.15;
-      font-weight: 800;
-    }
-
-    .meta-value {
-      font-size: clamp(1.15rem, 1.8vw, 1.55rem);
-      line-height: 1.25;
-      font-weight: 700;
-    }
-
-    .empty-state {
-      display: none;
-      margin-top: 1rem;
-      padding: 1.5rem 1.75rem;
-      border-radius: 1.5rem;
-      background: rgba(60, 17, 17, 0.95);
-      border: 1px solid rgba(255, 216, 216, 0.25);
-    }
-
-    .empty-state.visible {
-      display: block;
-    }
-
-    .empty-title {
-      margin: 0;
-      font-size: clamp(2rem, 4vw, 3.5rem);
-      font-weight: 800;
-      line-height: 1.05;
-    }
-
-    .empty-message {
-      margin: 0.75rem 0 0;
-      color: var(--danger-text);
-      font-size: clamp(1.2rem, 2vw, 2rem);
-      line-height: 1.3;
-      font-weight: 600;
-    }
-
-    @media (max-width: 1100px) {
-      .screen {
-        padding: 1.25rem;
-      }
-
-      .main-grid {
-        grid-template-columns: 1fr;
-      }
-    }
-
-    @media (max-width: 700px) {
-      .progress-grid,
-      .meta-grid {
-        grid-template-columns: 1fr;
-      }
-
-      .hero,
-      .panel,
-      .empty-state {
-        padding: 1.25rem;
-      }
-    }
-  </style>
+  <title>DAMSpy Visualiser</title>
+  <link rel="stylesheet" href="/src/styles.css">
 </head>
 <body>
-  <main class="screen">
-    <div id="statusBanner" class="banner" role="status" aria-live="polite"></div>
-
-    <section class="hero">
-      <div class="eyebrow">DAMSpy WOYM</div>
-      <h1 id="testGroup" class="hero-title">Loading...</h1>
-      <p id="testMethod" class="hero-subtitle">Waiting for data</p>
-    </section>
-
-    <section id="emptyState" class="empty-state visible" aria-live="polite">
-      <h2 class="empty-title">DATA UNAVAILABLE</h2>
-      <p id="emptyMessage" class="empty-message">Waiting for the first successful JSON refresh.</p>
-    </section>
-
-    <div class="main-grid">
-      <div class="left-column">
-        <section class="panel status-panel">
-          <h2 class="section-label">Status</h2>
-          <p id="stateValue" class="status-state">-</p>
-          <p id="stateMessage" class="status-message">-</p>
-        </section>
-
-        <section id="operatorPanel" class="panel operator-panel" aria-live="polite">
-          <h2 class="section-label">Waiting For Operator</h2>
-          <p class="operator-title">WAITING FOR OPERATOR</p>
-          <p id="operatorMessage" class="operator-message"></p>
-        </section>
-
-        <section class="panel">
-          <h2 class="section-label">Progress</h2>
-          <div class="progress-grid">
-            <div class="metric">
-              <span class="metric-label">Point</span>
-              <div id="pointProgress" class="metric-value">-</div>
-            </div>
-            <div class="metric">
-              <span class="metric-label">Sweep</span>
-              <div id="sweepProgress" class="metric-value">-</div>
-            </div>
-          </div>
-        </section>
+  <main class="app-shell">
+    <header class="topbar">
+      <div class="topbar-brand">
+        <span class="topbar-mark">DAMSpy</span>
+        <span class="topbar-title">Visualiser</span>
       </div>
 
-      <div class="right-column">
-        <section class="panel">
-          <h2 class="section-label">RF / Config</h2>
-          <div class="meta-grid">
-            <div class="meta-item">
-              <span class="meta-label">Polarisation</span>
-              <div id="polarisation" class="meta-value">-</div>
-            </div>
-            <div class="meta-item">
-              <span class="meta-label">Channel</span>
-              <div id="channel" class="meta-value">-</div>
-            </div>
-            <div class="meta-item">
-              <span class="meta-label">Frequency</span>
-              <div id="frequency" class="meta-value">-</div>
-            </div>
-            <div class="meta-item">
-              <span class="meta-label">Power</span>
-              <div id="powerLevel" class="meta-value">-</div>
-            </div>
-            <div class="meta-item">
-              <span class="meta-label">Orientation</span>
-              <div id="orientation" class="meta-value">-</div>
-            </div>
-          </div>
-        </section>
+      <nav class="topbar-nav" aria-label="Pages">
+        <button class="button button-ghost" data-route="/">Current Measurement</button>
+        <button class="button button-ghost" data-route="/results-analyser">Results Analyser</button>
+      </nav>
+    </header>
 
-        <section class="panel">
-          <h2 class="section-label">Last Measurement</h2>
-          <div class="meta-grid">
-            <div class="meta-item">
-              <span class="meta-label">RX Peak</span>
-              <div id="rxPeak" class="meta-value">-</div>
-            </div>
-            <div class="meta-item">
-              <span class="meta-label">Azimuth</span>
-              <div id="azimuth" class="meta-value">-</div>
-            </div>
-          </div>
-        </section>
+    <section id="measurementPage" class="page">
+      <div id="statusBanner" class="banner" role="status" aria-live="polite"></div>
 
-        <section class="panel">
-          <h2 class="section-label">Updated</h2>
-          <div id="updatedAt" class="meta-value">-</div>
-        </section>
+      <section class="hero">
+        <div class="hero-copy">
+          <div class="eyebrow">DAMSpy WOYM</div>
+          <h1 id="testGroup" class="hero-title">Loading...</h1>
+          <p id="testMethod" class="hero-subtitle">Waiting for data</p>
+        </div>
+
+        <div class="hero-actions">
+          <button class="button button-primary" data-route="/results-analyser">Open Results Analyser</button>
+        </div>
+      </section>
+
+      <section id="emptyState" class="empty-state visible" aria-live="polite">
+        <h2 class="empty-title">DATA UNAVAILABLE</h2>
+        <p id="emptyMessage" class="empty-message">Waiting for the first successful JSON refresh.</p>
+      </section>
+
+      <div class="main-grid">
+        <div class="left-column">
+          <section class="panel status-panel">
+            <h2 class="section-label">Status</h2>
+            <p id="stateValue" class="status-state">-</p>
+            <p id="stateMessage" class="status-message">-</p>
+          </section>
+
+          <section id="operatorPanel" class="panel operator-panel" aria-live="polite">
+            <h2 class="section-label">Waiting For Operator</h2>
+            <p class="operator-title">WAITING FOR OPERATOR</p>
+            <p id="operatorMessage" class="operator-message"></p>
+          </section>
+
+          <section class="panel">
+            <h2 class="section-label">Progress</h2>
+            <div class="progress-grid">
+              <div class="metric">
+                <span class="metric-label">Point</span>
+                <div id="pointProgress" class="metric-value">-</div>
+              </div>
+              <div class="metric">
+                <span class="metric-label">Sweep</span>
+                <div id="sweepProgress" class="metric-value">-</div>
+              </div>
+            </div>
+          </section>
+        </div>
+
+        <div class="right-column">
+          <section class="panel">
+            <h2 class="section-label">RF / Config</h2>
+            <div class="meta-grid">
+              <div class="meta-item">
+                <span class="meta-label">Polarisation</span>
+                <div id="polarisation" class="meta-value">-</div>
+              </div>
+              <div class="meta-item">
+                <span class="meta-label">Channel</span>
+                <div id="channel" class="meta-value">-</div>
+              </div>
+              <div class="meta-item">
+                <span class="meta-label">Frequency</span>
+                <div id="frequency" class="meta-value">-</div>
+              </div>
+              <div class="meta-item">
+                <span class="meta-label">Power</span>
+                <div id="powerLevel" class="meta-value">-</div>
+              </div>
+              <div class="meta-item">
+                <span class="meta-label">Orientation</span>
+                <div id="orientation" class="meta-value">-</div>
+              </div>
+            </div>
+          </section>
+
+          <section class="panel">
+            <h2 class="section-label">Last Measurement</h2>
+            <div class="meta-grid">
+              <div class="meta-item">
+                <span class="meta-label">RX Peak</span>
+                <div id="rxPeak" class="meta-value">-</div>
+              </div>
+              <div class="meta-item">
+                <span class="meta-label">Azimuth</span>
+                <div id="azimuth" class="meta-value">-</div>
+              </div>
+            </div>
+          </section>
+
+          <section class="panel">
+            <h2 class="section-label">Updated</h2>
+            <div id="updatedAt" class="meta-value">-</div>
+          </section>
+        </div>
       </div>
-    </div>
+    </section>
+
+    <section id="resultsAnalyserPage" class="page" hidden>
+      <div id="analyserBanner" class="banner" role="status" aria-live="polite"></div>
+
+      <section class="hero hero-compact">
+        <div class="hero-copy">
+          <div class="eyebrow">Results Analyser</div>
+          <h1 class="hero-title hero-title-compact">Overlaid Azimuth Results</h1>
+          <p id="analyserSubtitle" class="hero-subtitle hero-subtitle-compact">Loading the newest 1_meas_azimuth.yaml.</p>
+        </div>
+
+        <div class="hero-actions">
+          <button class="button button-secondary" data-route="/">Back To Current Measurement</button>
+          <button id="yamlPickerButton" class="button button-primary">Choose 1_meas_azimuth.yaml</button>
+        </div>
+      </section>
+
+      <section class="panel analyser-summary-panel">
+        <div class="summary-grid">
+          <div class="summary-item">
+            <span class="summary-label">Selected YAML</span>
+            <div id="selectedYamlPath" class="summary-value">-</div>
+          </div>
+          <div class="summary-item">
+            <span class="summary-label">Measurement Folder</span>
+            <div id="selectedMeasurementName" class="summary-value">-</div>
+          </div>
+          <div class="summary-item">
+            <span class="summary-label">Normalised To</span>
+            <div id="globalPeakValue" class="summary-value">-</div>
+          </div>
+          <div class="summary-item">
+            <span class="summary-label">Tests Found</span>
+            <div id="testCountValue" class="summary-value">-</div>
+          </div>
+        </div>
+
+        <div id="yamlPickerPanel" class="yaml-picker" hidden>
+          <div class="picker-header">
+            <h2 class="picker-title">Discovered YAML Files</h2>
+            <button id="yamlRefreshButton" class="button button-ghost button-small" type="button">Refresh List</button>
+          </div>
+          <div id="yamlOptions" class="yaml-options"></div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="section-heading">
+          <div>
+            <h2 class="section-label">Detected Test Folders</h2>
+            <p class="panel-description">These subdirectories sit under the selected YAML and represent the measurements included in the overlay.</p>
+          </div>
+          <div id="measurementUpdatedAt" class="timestamp-pill">-</div>
+        </div>
+        <div id="testFolderList" class="folder-list"></div>
+      </section>
+
+      <section class="panel">
+        <div class="section-heading section-heading-stack">
+          <div>
+            <h2 class="section-label">Polarisation / Orientation Grid</h2>
+            <p class="panel-description">Hover to inspect values. Click a chart to pin the readout. All channels are normalised to the strongest dBm measured anywhere in the selected set.</p>
+          </div>
+        </div>
+
+        <div id="plotGridContainer" class="plot-grid-container">
+          <div class="plot-grid-empty">Loading analyser data...</div>
+        </div>
+      </section>
+    </section>
   </main>
 
-  <script>
-    const JSON_URL = "/DAMspy-core/src/DAMspy_logs/latest_woym.json";
-    const REFRESH_MS = 2000;
-    const MISSING = "\u2014";
-
-    let isRequestInFlight = false;
-    let hasSuccessfulLoad = false;
-
-    const elements = {
-      banner: document.getElementById("statusBanner"),
-      emptyState: document.getElementById("emptyState"),
-      emptyMessage: document.getElementById("emptyMessage"),
-      testGroup: document.getElementById("testGroup"),
-      testMethod: document.getElementById("testMethod"),
-      stateValue: document.getElementById("stateValue"),
-      stateMessage: document.getElementById("stateMessage"),
-      pointProgress: document.getElementById("pointProgress"),
-      sweepProgress: document.getElementById("sweepProgress"),
-      polarisation: document.getElementById("polarisation"),
-      channel: document.getElementById("channel"),
-      frequency: document.getElementById("frequency"),
-      powerLevel: document.getElementById("powerLevel"),
-      orientation: document.getElementById("orientation"),
-      rxPeak: document.getElementById("rxPeak"),
-      azimuth: document.getElementById("azimuth"),
-      updatedAt: document.getElementById("updatedAt"),
-      operatorPanel: document.getElementById("operatorPanel"),
-      operatorMessage: document.getElementById("operatorMessage")
-    };
-
-    function getValue(source, path, fallback = MISSING) {
-      let current = source;
-
-      for (const key of path) {
-        if (current == null || typeof current !== "object" || !(key in current)) {
-          return fallback;
-        }
-
-        current = current[key];
-      }
-
-      if (current === null || current === undefined || current === "") {
-        return fallback;
-      }
-
-      return current;
-    }
-
-    function formatNumber(value, digits) {
-      const numericValue = Number(value);
-      if (!Number.isFinite(numericValue)) {
-        return MISSING;
-      }
-      return numericValue.toFixed(digits);
-    }
-
-    function formatFrequency(value) {
-      const numericValue = Number(value);
-      if (!Number.isFinite(numericValue)) {
-        return MISSING;
-      }
-
-      if (Math.abs(numericValue) >= 1e9) {
-        return numericValue / 1e9 + " GHz";
-      }
-
-      if (Math.abs(numericValue) >= 1e6) {
-        return numericValue / 1e6 + " MHz";
-      }
-
-      if (Math.abs(numericValue) >= 1e3) {
-        return numericValue / 1e3 + " kHz";
-      }
-
-      return numericValue + " Hz";
-    }
-
-    function formatDbm(value) {
-      const formatted = formatNumber(value, 2);
-      return formatted === MISSING ? MISSING : formatted + " dBm";
-    }
-
-    function formatDegrees(value) {
-      const formatted = formatNumber(value, 1);
-      return formatted === MISSING ? MISSING : formatted + "\u00b0";
-    }
-
-    function formatProgress(indexValue, totalValue) {
-      const indexText = indexValue === MISSING ? MISSING : String(indexValue);
-      const totalText = totalValue === MISSING ? MISSING : String(totalValue);
-      return indexText + " / " + totalText;
-    }
-
-    function formatUpdatedAt(value) {
-      if (value === MISSING) {
-        return MISSING;
-      }
-
-      const date = new Date(value);
-      if (Number.isNaN(date.getTime())) {
-        return String(value);
-      }
-
-      return date.toLocaleString();
-    }
-
-    function setBanner(kind, message) {
-      elements.banner.className = "banner visible " + kind;
-      elements.banner.textContent = message;
-    }
-
-    function clearBanner() {
-      elements.banner.className = "banner";
-      elements.banner.textContent = "";
-    }
-
-    function showEmptyState(message) {
-      elements.emptyState.classList.add("visible");
-      elements.emptyMessage.textContent = message;
-    }
-
-    function hideEmptyState() {
-      elements.emptyState.classList.remove("visible");
-    }
-
-    function renderData(data) {
-      const pointIndex = getValue(data, ["current_sweep", "point_index"]);
-      const totalPoints = getValue(data, ["current_sweep", "total_points"]);
-      const sweepIndex = getValue(data, ["current_sweep", "sweep_index"]);
-      const totalSweeps = getValue(data, ["current_sweep", "total_sweeps"]);
-      const operatorAction = getValue(data, ["operator_action"], "");
-
-      elements.testGroup.textContent = getValue(data, ["current_test_group"]);
-      elements.testMethod.textContent = getValue(data, ["current_test_method"]);
-      elements.stateValue.textContent = getValue(data, ["current_state", "state"]);
-      elements.stateMessage.textContent = getValue(data, ["current_state", "message"]);
-      elements.pointProgress.textContent = formatProgress(pointIndex, totalPoints);
-      elements.sweepProgress.textContent = formatProgress(sweepIndex, totalSweeps);
-      elements.polarisation.textContent = getValue(data, ["polarisation"]);
-      elements.channel.textContent = getValue(data, ["channel"]);
-      elements.frequency.textContent = formatFrequency(getValue(data, ["frequency_hz"]));
-      elements.powerLevel.textContent = getValue(data, ["power_level"]);
-      elements.orientation.textContent = getValue(data, ["orientation"]);
-      elements.rxPeak.textContent = formatDbm(getValue(data, ["last_measurement", "rx_peak_dbm"]));
-      elements.azimuth.textContent = formatDegrees(getValue(data, ["last_measurement", "azimuth_deg"]));
-      elements.updatedAt.textContent = formatUpdatedAt(getValue(data, ["updated_at"]));
-
-      if (operatorAction) {
-        elements.operatorPanel.classList.add("visible");
-        elements.operatorMessage.textContent = operatorAction;
-      } else {
-        elements.operatorPanel.classList.remove("visible");
-        elements.operatorMessage.textContent = "";
-      }
-    }
-
-    async function refreshData() {
-      if (isRequestInFlight) {
-        return;
-      }
-
-      isRequestInFlight = true;
-
-      try {
-        const response = await fetch(JSON_URL, { cache: "no-store" });
-
-        if (!response.ok) {
-          throw new Error("HTTP " + response.status + " " + response.statusText);
-        }
-
-        const data = await response.json();
-        renderData(data);
-        hasSuccessfulLoad = true;
-        hideEmptyState();
-        clearBanner();
-      } catch (error) {
-        const message = error instanceof Error ? error.message : "Unknown error";
-
-        if (!hasSuccessfulLoad) {
-          showEmptyState("Unable to load " + JSON_URL + ". " + message);
-          setBanner("error", "DATA UNAVAILABLE: " + message);
-        } else {
-          setBanner("warning", "Showing last successful update. Refresh failed: " + message);
-        }
-      } finally {
-        isRequestInFlight = false;
-      }
-    }
-
-    refreshData();
-    window.setInterval(refreshData, REFRESH_MS);
-  </script>
+  <script src="/src/app.js"></script>
 </body>
 </html>
