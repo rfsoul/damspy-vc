@@ -297,8 +297,11 @@ function bindRoutes() {
   window.addEventListener("popstate", renderRoute);
 }
 
-async function fetchJson(url) {
-  const response = await fetch(url, { cache: "no-store" });
+async function fetchJson(url, options = {}) {
+  const response = await fetch(url, {
+    cache: "no-store",
+    ...options
+  });
 
   if (!response.ok) {
     throw new Error("HTTP " + response.status + " " + response.statusText);
@@ -318,8 +321,8 @@ async function loadMeasurementList(options = {}) {
     const data = await fetchJson("/api/results-analyser/yamls");
     analyserState.measurements = Array.isArray(data.measurements) ? data.measurements : [];
     analyserState.defaultMeasurementId = data.default_measurement_id || "";
-
     const currentExists = analyserState.measurements.some((measurement) => measurement.measurement_id === analyserState.selectedMeasurementId);
+
     if (!currentExists) {
       analyserState.selectedMeasurementId = analyserState.defaultMeasurementId || "";
     }
@@ -349,7 +352,6 @@ async function loadMeasurementDataset(measurementId) {
   analyserState.selectedMeasurementId = measurementId;
   const requestId = ++analyserState.dataRequestSerial;
   analyserElements.subtitle.textContent = "Loading " + measurementId + "...";
-  renderYamlPicker();
 
   try {
     const data = await fetchJson("/api/results-analyser/data?measurement_id=" + encodeURIComponent(measurementId));

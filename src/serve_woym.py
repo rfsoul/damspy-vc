@@ -80,6 +80,16 @@ def read_json_file(path: Path) -> dict[str, Any]:
         return json.load(handle)
 
 
+def display_path(path: Path, root: Path) -> str:
+    resolved_path = path.resolve(strict=False)
+    resolved_root = root.resolve(strict=False)
+
+    try:
+        return resolved_path.relative_to(resolved_root).as_posix()
+    except ValueError:
+        return str(resolved_path)
+
+
 def read_csv_points(path: Path, axis_key: str) -> list[dict[str, float]]:
     points: list[dict[str, float]] = []
 
@@ -217,7 +227,6 @@ def find_first_csv(path: Path) -> Path | None:
 
 def load_measurement_dataset(logs_root: Path, measurement_id: str) -> dict[str, Any]:
     measurement_dir, yaml_path, results_dir = resolve_measurement(logs_root, measurement_id)
-
     if not path_is_file(yaml_path):
         raise FileNotFoundError(f"Could not find {yaml_path.name} for {measurement_id}")
 
@@ -296,7 +305,7 @@ def load_measurement_dataset(logs_root: Path, measurement_id: str) -> dict[str, 
         return {
             "measurement_id": measurement_id,
             "measurement_name": measurement_dir.name,
-            "yaml_relative_path": f"{measurement_dir.name}/1_meas_azimuth.yaml",
+            "yaml_relative_path": display_path(yaml_path, logs_root),
             "updated_at": format_timestamp(updated_at),
             "global_peak_dbm": None,
             "rows": [],
@@ -369,7 +378,7 @@ def load_measurement_dataset(logs_root: Path, measurement_id: str) -> dict[str, 
     return {
         "measurement_id": measurement_id,
         "measurement_name": measurement_dir.name,
-        "yaml_relative_path": f"{measurement_dir.name}/1_meas_azimuth.yaml",
+        "yaml_relative_path": display_path(yaml_path, logs_root),
         "updated_at": format_timestamp(updated_at),
         "global_peak_dbm": round(global_peak_dbm, 6),
         "rows": rows,
