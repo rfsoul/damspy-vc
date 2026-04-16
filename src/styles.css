@@ -440,6 +440,54 @@ textarea {
   margin-bottom: 1.1rem;
 }
 
+.collapsible-panel {
+  padding: 0;
+  overflow: hidden;
+}
+
+.collapsible-summary {
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1.15rem 1.35rem;
+  cursor: pointer;
+}
+
+.collapsible-summary::-webkit-details-marker {
+  display: none;
+}
+
+.collapsible-summary::after {
+  content: "+";
+  margin-left: auto;
+  color: var(--accent);
+  font-size: 1rem;
+  font-weight: 900;
+  line-height: 1;
+}
+
+.collapsible-panel[open] .collapsible-summary::after {
+  content: "-";
+}
+
+.collapsible-title-group {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.collapsible-content {
+  padding: 0 1.35rem 1.35rem;
+  display: grid;
+  gap: 1rem;
+}
+
+.collapsible-body-description {
+  margin: 0;
+}
+
 .timestamp-pill {
   padding: 0.55rem 0.85rem;
   border-radius: 999px;
@@ -454,6 +502,11 @@ textarea {
   margin-top: 1rem;
   border-top: 1px solid var(--border);
   padding-top: 1rem;
+  display: grid;
+  gap: 0.9rem;
+}
+
+.yaml-picker-panel {
   display: grid;
   gap: 0.9rem;
 }
@@ -524,7 +577,9 @@ textarea {
 }
 
 .plot-grid-container {
-  overflow-x: auto;
+  width: 100%;
+  flex: 1 1 auto;
+  overflow: visible;
 }
 
 .plot-section-controls {
@@ -533,10 +588,17 @@ textarea {
   gap: 0.6rem;
 }
 
+.plot-panel {
+  min-height: calc(100vh - 2rem);
+  display: flex;
+  flex-direction: column;
+}
+
 .plot-grid {
   display: grid;
-  gap: 1rem;
-  min-width: min-content;
+  gap: 0.2rem;
+  width: 100%;
+  align-content: start;
 }
 
 .plot-grid-corner,
@@ -545,7 +607,7 @@ textarea {
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 0.95rem;
+  padding: 0.65rem;
   border-radius: 1rem;
   border: 1px solid var(--border);
   background: var(--plot-cell-bg);
@@ -555,89 +617,88 @@ textarea {
 
 .plot-grid-corner {
   justify-content: flex-start;
-  padding-left: 1.1rem;
+  padding-left: 0.8rem;
+  font-size: 0.9rem;
+  font-weight: 900;
 }
 
 .plot-grid-col-header {
-  min-width: 18rem;
+  min-width: 0;
+  font-size: 1.25rem;
+  font-weight: 900;
+  letter-spacing: 0.03em;
 }
 
 .plot-grid-row-header {
   writing-mode: vertical-rl;
   transform: rotate(180deg);
-  letter-spacing: 0.14em;
+  letter-spacing: 0.03em;
   text-transform: uppercase;
+  font-size: 1.05rem;
+  font-weight: 900;
 }
 
 .plot-card {
-  min-width: 18rem;
-  padding: 1rem;
+  min-width: 0;
+  padding: 0.15rem;
   border-radius: 1.2rem;
   border: 1px solid var(--border);
   background: var(--plot-card-bg);
   display: grid;
-  gap: 0.85rem;
+  gap: 0.12rem;
 }
 
-.plot-card-header {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 0.75rem;
-}
-
-.plot-card-title {
-  margin: 0;
-  font-size: 1.05rem;
-  font-weight: 800;
-}
-
-.plot-card-subtitle {
-  margin: 0;
-  color: var(--muted);
-  font-size: 0.92rem;
+.plot-visual {
+  display: grid;
+  width: 100%;
+  gap: 0.12rem;
+  align-items: start;
 }
 
 .plot-readout {
-  min-height: 5.3rem;
-  padding: 0.75rem 0.85rem;
+  min-height: 1.25rem;
+  padding: 0.2rem 0.3rem;
   border-radius: 0.95rem;
   background: var(--plot-readout-bg);
   border: 1px solid var(--border);
   display: grid;
-  gap: 0.25rem;
+  gap: 0.1rem;
 }
 
 .plot-readout-title {
-  font-size: 0.95rem;
+  font-size: 0.7rem;
   font-weight: 800;
 }
 
 .plot-readout-hint {
   color: var(--muted);
-  font-size: 0.92rem;
+  font-size: 0.62rem;
+  line-height: 1.2;
 }
 
 .plot-readout-row {
   display: flex;
   align-items: center;
-  gap: 0.55rem;
+  gap: 0.3rem;
   color: var(--muted-strong);
-  font-size: 0.92rem;
+  font-size: 0.62rem;
 }
 
 .swatch {
-  width: 0.75rem;
-  height: 0.75rem;
+  width: 0.46rem;
+  height: 0.46rem;
   border-radius: 999px;
   flex: 0 0 auto;
 }
 
 .plot-svg {
   width: 100%;
+  max-width: 100%;
   height: auto;
+  min-width: 0;
   border-radius: 0.95rem;
   background: var(--plot-svg-bg);
+  display: block;
 }
 
 .plot-svg .polar-paper {
@@ -671,13 +732,13 @@ textarea {
 .plot-svg .polar-angle-label,
 .plot-svg .tick-label {
   fill: var(--plot-label);
-  font-size: 11.5px;
-  font-weight: 700;
+  font-size: 9px;
+  font-weight: 600;
   font-family: "Bahnschrift", "Aptos", "Segoe UI", sans-serif;
 }
 
 .plot-svg .polar-angle-label {
-  font-size: 10.5px;
+  font-size: 8px;
 }
 
 .plot-svg .series-line {
@@ -699,22 +760,27 @@ textarea {
 }
 
 .plot-legend {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.55rem;
+  display: grid;
+  gap: 0.18rem;
+  align-content: start;
+  width: 100%;
+  min-width: 0;
 }
 
 .legend-item,
 .legend-reference {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.45rem;
-  padding: 0.45rem 0.7rem;
-  border-radius: 999px;
+  display: flex;
+  align-items: flex-start;
+  gap: 0.35rem;
+  padding: 0.16rem 0.28rem;
+  border-radius: 0.55rem;
   background: var(--legend-bg);
   border: 1px solid var(--border);
   color: var(--muted-strong);
-  font-size: 0.86rem;
+  font-size: 0.88rem;
+  line-height: 1.2;
+  white-space: nowrap;
+  text-align: left;
 }
 
 .legend-reference {
@@ -743,6 +809,10 @@ textarea {
   .plot-grid-row-header {
     writing-mode: initial;
     transform: none;
+  }
+
+  .plot-visual {
+    grid-template-columns: 1fr;
   }
 }
 

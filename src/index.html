@@ -133,47 +133,60 @@
         </div>
       </section>
 
-      <section class="panel analyser-summary-panel">
-        <div class="summary-grid">
-          <div class="summary-item">
-            <span class="summary-label">Selected YAML</span>
-            <div id="selectedYamlPath" class="summary-value">-</div>
+      <details id="measurementDetailsPanel" class="panel collapsible-panel analyser-summary-panel">
+        <summary class="collapsible-summary">
+          <div class="collapsible-title-group">
+            <h2 class="section-label">Measurement Details</h2>
+            <p class="panel-description">Selected YAML, measurement folder, global dB ref, and tests found.</p>
           </div>
-          <div class="summary-item">
-            <span class="summary-label">Measurement Folder</span>
-            <div id="selectedMeasurementName" class="summary-value">-</div>
-          </div>
-          <div class="summary-item">
-            <span class="summary-label">Global dB Ref</span>
-            <div id="globalPeakValue" class="summary-value">-</div>
-          </div>
-          <div class="summary-item">
-            <span class="summary-label">Tests Found</span>
-            <div id="testCountValue" class="summary-value">-</div>
-          </div>
-        </div>
+        </summary>
 
-        <div id="yamlPickerPanel" class="yaml-picker" hidden>
-          <div class="picker-header">
-            <h2 class="picker-title">Discovered YAML Files</h2>
-            <button id="yamlRefreshButton" class="button button-ghost button-small" type="button">Refresh List</button>
+        <div class="collapsible-content">
+          <div class="summary-grid">
+            <div class="summary-item">
+              <span class="summary-label">Selected YAML</span>
+              <div id="selectedYamlPath" class="summary-value">-</div>
+            </div>
+            <div class="summary-item">
+              <span class="summary-label">Measurement Folder</span>
+              <div id="selectedMeasurementName" class="summary-value">-</div>
+            </div>
+            <div class="summary-item">
+              <span class="summary-label">Global dB Ref</span>
+              <div id="globalPeakValue" class="summary-value">-</div>
+            </div>
+            <div class="summary-item">
+              <span class="summary-label">Tests Found</span>
+              <div id="testCountValue" class="summary-value">-</div>
+            </div>
           </div>
-          <div id="yamlOptions" class="yaml-options"></div>
         </div>
+      </details>
+
+      <section id="yamlPickerPanel" class="panel yaml-picker-panel" hidden>
+        <div class="picker-header">
+          <h2 class="picker-title">Discovered YAML Files</h2>
+          <button id="yamlRefreshButton" class="button button-ghost button-small" type="button">Refresh List</button>
+        </div>
+        <div id="yamlOptions" class="yaml-options"></div>
       </section>
 
-      <section class="panel">
-        <div class="section-heading">
-          <div>
+      <details id="testFolderPanel" class="panel collapsible-panel">
+        <summary class="collapsible-summary">
+          <div class="collapsible-title-group">
             <h2 class="section-label">Detected Test Folders</h2>
-            <p class="panel-description">These subdirectories sit under the selected YAML and represent the measurements included in the overlay.</p>
+            <p id="testFolderSummaryText" class="panel-description">Folders/tests = -</p>
           </div>
           <div id="measurementUpdatedAt" class="timestamp-pill">-</div>
-        </div>
-        <div id="testFolderList" class="folder-list"></div>
-      </section>
+        </summary>
 
-      <section class="panel">
+        <div class="collapsible-content">
+          <p class="panel-description collapsible-body-description">These subdirectories sit under the selected YAML and represent the measurements included in the overlay.</p>
+          <div id="testFolderList" class="folder-list"></div>
+        </div>
+      </details>
+
+      <section class="panel plot-panel">
         <div class="section-heading section-heading-stack">
           <div>
             <h2 class="section-label">Polarisation / Orientation Grid</h2>

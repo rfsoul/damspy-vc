@@ -18,6 +18,11 @@ const PLOT_DISPLAY_MODES = {
   DB: "db"
 };
 const E_OVER_EMAX_DB_GUIDES = [-20, -10, -6, -3];
+const FIXED_CHANNEL_COLORS = new Map([
+  ["0", "#ef4444"],
+  ["40", "#22c55e"],
+  ["80", "#3b82f6"]
+]);
 
 const measurementElements = {
   page: document.getElementById("measurementPage"),
@@ -46,6 +51,8 @@ const analyserElements = {
   page: document.getElementById("resultsAnalyserPage"),
   banner: document.getElementById("analyserBanner"),
   subtitle: document.getElementById("analyserSubtitle"),
+  measurementDetailsPanel: document.getElementById("measurementDetailsPanel"),
+  testFolderPanel: document.getElementById("testFolderPanel"),
   yamlPickerButton: document.getElementById("yamlPickerButton"),
   yamlRefreshButton: document.getElementById("yamlRefreshButton"),
   yamlPickerPanel: document.getElementById("yamlPickerPanel"),
@@ -54,6 +61,7 @@ const analyserElements = {
   selectedMeasurementName: document.getElementById("selectedMeasurementName"),
   globalPeakValue: document.getElementById("globalPeakValue"),
   testCountValue: document.getElementById("testCountValue"),
+  testFolderSummaryText: document.getElementById("testFolderSummaryText"),
   measurementUpdatedAt: document.getElementById("measurementUpdatedAt"),
   testFolderList: document.getElementById("testFolderList"),
   plotGridContainer: document.getElementById("plotGridContainer"),
@@ -184,6 +192,29 @@ function formatLocalDateTime(value) {
 
 function formatChannelLabel(channel) {
   return channel === MISSING || channel === null || channel === undefined ? "Ch ?" : "Ch " + channel;
+}
+
+function formatPolarisationLabel(value) {
+  const text = value === null || value === undefined ? "" : String(value).trim();
+
+  if (!text) {
+    return MISSING;
+  }
+
+  const upper = text.toUpperCase();
+  if (upper === "H") {
+    return "Hpol";
+  }
+  if (upper === "V") {
+    return "Vpol";
+  }
+
+  return text;
+}
+
+function getChannelColor(channel, index) {
+  const key = channel === null || channel === undefined ? "" : String(channel).trim();
+  return FIXED_CHANNEL_COLORS.get(key) || CHANNEL_COLORS[index % CHANNEL_COLORS.length];
 }
 
 function dbToAmplitudeRatio(value) {
@@ -491,6 +522,7 @@ function renderAnalyserEmpty(message) {
   analyserElements.selectedMeasurementName.textContent = MISSING;
   analyserElements.globalPeakValue.textContent = MISSING;
   analyserElements.testCountValue.textContent = MISSING;
+  analyserElements.testFolderSummaryText.textContent = "Folders/tests = -";
   analyserElements.measurementUpdatedAt.textContent = MISSING;
   analyserElements.testFolderList.replaceChildren();
   analyserElements.plotGridContainer.replaceChildren();
@@ -504,8 +536,8 @@ function renderAnalyserEmpty(message) {
 
 function getPlotModeDescription() {
   return analyserState.plotDisplayMode === PLOT_DISPLAY_MODES.E_OVER_EMAX
-    ? "Hover to inspect values. Click a chart to pin the readout. Each plot normalises its overlaid channels to that plot's strongest point in E/Emax form, with dB guide circles from -3 dB to -20 dB."
-    : "Hover to inspect values. Click a chart to pin the readout. All channels are normalised to the strongest dBm measured anywhere in the selected set.";
+    ? "Hover to inspect. Click to pin. E/Emax with -3 dB to -20 dB guide circles."
+    : "Hover to inspect. Click to pin. dB values are relative to the selected set's strongest peak.";
 }
 
 function updatePlotModeUi() {
@@ -522,6 +554,7 @@ function renderAnalyserData(data) {
   analyserElements.selectedMeasurementName.textContent = data.measurement_name || MISSING;
   analyserElements.globalPeakValue.textContent = formatDbm(data.global_peak_dbm);
   analyserElements.testCountValue.textContent = String(data.folders.length);
+  analyserElements.testFolderSummaryText.textContent = "Folders/tests = " + String(data.folders.length);
   analyserElements.measurementUpdatedAt.textContent = "Updated " + formatLocalDateTime(data.updated_at);
 
   updatePlotModeUi();
@@ -674,29 +707,29 @@ function renderPlotGrid(data) {
   const plotMap = new Map(data.plots.map((plot) => [plotKey(plot.polarisation, plot.orientation), plot]));
   const grid = document.createElement("div");
   grid.className = "plot-grid";
-  grid.style.gridTemplateColumns = `8.5rem repeat(${data.columns.length}, minmax(18rem, 1fr))`;
+  grid.style.gridTemplateColumns = `4.5rem repeat(${data.rows.length}, minmax(0, 1fr))`;
 
   const corner = document.createElement("div");
   corner.className = "plot-grid-corner";
-  corner.textContent = "Polarisation \\ Orientation";
+  corner.textContent = "Orientation \\ Polarisation";
   grid.append(corner);
 
-  for (const column of data.columns) {
+  for (const column of data.rows) {
     const header = document.createElement("div");
     header.className = "plot-grid-col-header";
-    header.textContent = column;
+    header.textContent = formatPolarisationLabel(column);
     grid.append(header);
   }
 
-  for (const row of data.rows) {
+  for (const row of data.columns) {
     const rowHeader = document.createElement("div");
     rowHeader.className = "plot-grid-row-header";
     rowHeader.textContent = row;
     grid.append(rowHeader);
 
-    for (const column of data.columns) {
-      const plot = plotMap.get(plotKey(row, column));
-      grid.append(createPlotCard(plot, row, column, data, analyserState.plotDisplayMode));
+    for (const column of data.rows) {
+      const plot = plotMap.get(plotKey(column, row));
+      grid.append(createPlotCard(plot, column, row, data, analyserState.plotDisplayMode));
     }
   }
 
@@ -718,27 +751,12 @@ function createPlotCard(plot, row, column, dataset, mode) {
   const card = document.createElement("article");
   card.className = "plot-card";
 
-  const header = document.createElement("div");
-  header.className = "plot-card-header";
-
-  const titleGroup = document.createElement("div");
-  const title = document.createElement("h3");
-  title.className = "plot-card-title";
-  title.textContent = row + " | " + column;
-
-  const subtitle = document.createElement("p");
-  subtitle.className = "plot-card-subtitle";
-  subtitle.textContent = plot.series.length + " overlaid channel(s)";
-
-  titleGroup.append(title, subtitle);
-  header.append(titleGroup);
-
   const readout = document.createElement("div");
   readout.className = "plot-readout";
 
   const colorisedSeries = sortSeries(plot.series).map((entry, index) => ({
     ...entry,
-    color: CHANNEL_COLORS[index % CHANNEL_COLORS.length]
+    color: getChannelColor(entry.channel, index)
   }));
   const preparedPlot = prepareSeriesForPlot(colorisedSeries, dataset, mode);
 
@@ -746,8 +764,11 @@ function createPlotCard(plot, row, column, dataset, mode) {
 
   const svg = createPlotSvg(preparedPlot, readout, row, column, mode);
   const legend = createPlotLegend(preparedPlot, mode);
+  const visual = document.createElement("div");
+  visual.className = "plot-visual";
+  visual.append(svg, legend);
 
-  card.append(header, readout, svg, legend);
+  card.append(readout, visual);
   return card;
 }
 
@@ -758,8 +779,8 @@ function createPlotLegend(preparedPlot, mode) {
   const reference = document.createElement("div");
   reference.className = "legend-reference";
   reference.textContent = mode === PLOT_DISPLAY_MODES.E_OVER_EMAX
-    ? "Plot max " + formatDbm(preparedPlot.plotPeakDbm)
-    : "Ref peak " + formatDbm(preparedPlot.globalPeakDbm);
+    ? "Max " + formatDbm(preparedPlot.plotPeakDbm)
+    : "Ref " + formatDbm(preparedPlot.globalPeakDbm);
   legend.append(reference);
 
   for (const entry of preparedPlot.series) {
@@ -772,8 +793,8 @@ function createPlotLegend(preparedPlot, mode) {
 
     const text = document.createElement("span");
     text.textContent = mode === PLOT_DISPLAY_MODES.E_OVER_EMAX
-      ? formatChannelLabel(entry.channel) + " peak " + formatEOverEmax(entry.peak_e_over_emax) + " | " + formatDbm(entry.peak_dbm)
-      : formatChannelLabel(entry.channel) + " peak " + formatDbm(entry.peak_dbm) + " (" + formatSignedDb(entry.peak_offset_db) + ")";
+      ? formatChannelLabel(entry.channel) + " " + formatEOverEmax(entry.peak_e_over_emax) + " | " + formatDbm(entry.peak_dbm)
+      : formatChannelLabel(entry.channel) + " " + formatDbm(entry.peak_dbm) + " | " + formatSignedDb(entry.peak_offset_db);
 
     item.append(swatch, text);
     legend.append(item);
@@ -817,15 +838,6 @@ function updatePlotReadout(container, angle, rows, pinned, mode) {
   container.replaceChildren();
 
   if (angle === null || !rows.length) {
-    const title = document.createElement("div");
-    title.className = "plot-readout-title";
-    title.textContent = "Cursor readout";
-
-    const hint = document.createElement("div");
-    hint.className = "plot-readout-hint";
-    hint.textContent = "Hover to inspect values. Click to pin the current angle.";
-
-    container.append(title, hint);
     return;
   }
 
@@ -1138,6 +1150,7 @@ function createPlotSvg(preparedPlot, readout, row, column, mode) {
 function bindAnalyserControls() {
   analyserElements.yamlPickerButton.addEventListener("click", async () => {
     analyserState.pickerOpen = !analyserState.pickerOpen;
+
     renderYamlPicker();
 
     if (analyserState.pickerOpen) {
@@ -1178,9 +1191,15 @@ function bindThemeControls() {
   });
 }
 
+function initialiseCollapsedAnalyserPanels() {
+  analyserElements.measurementDetailsPanel.open = false;
+  analyserElements.testFolderPanel.open = false;
+}
+
 bindRoutes();
 bindAnalyserControls();
 bindThemeControls();
+initialiseCollapsedAnalyserPanels();
 applyTheme(readStoredTheme());
 updatePlotModeUi();
 renderRoute();
