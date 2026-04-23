@@ -21,6 +21,12 @@ from urllib.parse import parse_qs, unquote, urlsplit
 
 
 KNOWN_ROUTES = {"/", "/results-analyser", "/results-analyser/"}
+PREFERRED_DEFAULT_MEASUREMENT_ID = (
+    "_best/"
+    "Antenna_Pattern_Measurement-2026-04-10_11-22-16-"
+    "hendrix-tx_V3-04F_002-bodyworn-Ori_ori1_ori2-Ch_0_40_80-"
+    "Pwr_10-Pol_H_V-Step_2deg-RxAnt_Horn_WR340"
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -138,9 +144,13 @@ def coerce_float(value: Any) -> float | None:
 def read_yaml_summary_fields(path: Path) -> dict[str, Any]:
     field_values: dict[str, Any] = {
         "dut_product": None,
+        "dut_hardware_config": None,
         "dut_serial_number": None,
+        "tx_mode": None,
         "foldername_comment": None,
         "orientation_photo_location": None,
+        "rx_antenna_name": None,
+        "rx_antenna_comment": None,
         "tx_cable_loss_db": None,
         "tx_power_dbm": None,
         "rx_antenna_gain_dbi": None,
@@ -149,16 +159,22 @@ def read_yaml_summary_fields(path: Path) -> dict[str, Any]:
     }
     top_level_fields = {
         "DUT_product": "dut_product",
+        "DUT_hardware_config": "dut_hardware_config",
         "DUT_serial_number": "dut_serial_number",
+        "tx_mode": "tx_mode",
+        "Tx_mode": "tx_mode",
         "foldername_comment": "foldername_comment",
         "orientation_photo_location": "orientation_photo_location",
     }
     section_fields = {
         "sig_gen_1": {
+            "tx_mode": "tx_mode",
             "tx_cable_loss": "tx_cable_loss_db",
             "tx_power": "tx_power_dbm",
         },
         "rx_path": {
+            "antenna": "rx_antenna_name",
+            "antenna_comment": "rx_antenna_comment",
             "rx_antena_gain": "rx_antenna_gain_dbi",
             "rx_antenna_gain": "rx_antenna_gain_dbi",
             "rx_cable_loss": "rx_cable_loss_db",
@@ -361,6 +377,12 @@ def format_timestamp(timestamp: float) -> str:
     return datetime.fromtimestamp(timestamp, tz=timezone.utc).isoformat()
 
 
+def get_file_created_timestamp(path: Path) -> float:
+    stat_result = os.stat(extended_path(path))
+    created_at = getattr(stat_result, "st_birthtime", None)
+    return created_at if created_at is not None else stat_result.st_ctime
+
+
 def measurement_name_timestamp(value: str) -> float | None:
     match = re.search(r"(\d{4}-\d{2}-\d{2})_(\d{2}-\d{2}-\d{2})", value)
 
@@ -499,6 +521,7 @@ def load_measurement_dataset(logs_root: Path, measurement_id: str) -> dict[str, 
         raise FileNotFoundError(f"Could not find results directory for {measurement_id}")
 
     yaml_summary = read_yaml_summary_fields(yaml_path)
+    yaml_created_at = format_timestamp(get_file_created_timestamp(yaml_path))
     folders: list[dict[str, Any]] = []
     plot_groups: dict[tuple[str, str], dict[str, Any]] = {}
     global_peak_dbm: float | None = None
@@ -545,9 +568,9 @@ def load_measurement_dataset(logs_root: Path, measurement_id: str) -> dict[str, 
         tx_cable_loss_db = coerce_float(series_info.get("tx_cable_loss"))
         if tx_cable_loss_db is None:
             tx_cable_loss_db = coerce_float(yaml_summary.get("tx_cable_loss_db"))
-        rx_antenna_gain_dbi = coerce_float(rx_path_info.get("rx_antena_gain"))
+        rx_antenna_gain_dbi = coerce_float(rx_path_info.get("rx_antenna_gain"))
         if rx_antenna_gain_dbi is None:
-            rx_antenna_gain_dbi = coerce_float(rx_path_info.get("rx_antenna_gain"))
+            rx_antenna_gain_dbi = coerce_float(rx_path_info.get("rx_antena_gain"))
         if rx_antenna_gain_dbi is None:
             rx_antenna_gain_dbi = coerce_float(yaml_summary.get("rx_antenna_gain_dbi"))
         rx_cable_loss_db = coerce_float(rx_path_info.get("rx_cable_loss"))
@@ -608,6 +631,7 @@ def load_measurement_dataset(logs_root: Path, measurement_id: str) -> dict[str, 
             "measurement_id": measurement_id,
             "measurement_name": measurement_dir.name,
             "yaml_relative_path": display_path(yaml_path, logs_root),
+            "yaml_created_at": yaml_created_at,
             "updated_at": format_timestamp(updated_at),
             **yaml_summary,
             "global_peak_dbm": None,
@@ -693,6 +717,7 @@ def load_measurement_dataset(logs_root: Path, measurement_id: str) -> dict[str, 
         "measurement_id": measurement_id,
         "measurement_name": measurement_dir.name,
         "yaml_relative_path": display_path(yaml_path, logs_root),
+        "yaml_created_at": yaml_created_at,
         "updated_at": format_timestamp(updated_at),
         **yaml_summary,
         "global_peak_dbm": round(global_peak_dbm, 6),
@@ -767,7 +792,12 @@ class WOYMRequestHandler(SimpleHTTPRequestHandler):
 
     def handle_yaml_list(self) -> None:
         measurements = list_measurements(self.logs_root)
-        default_measurement_id = measurements[0]["measurement_id"] if measurements else None
+        measurement_ids = {measurement["measurement_id"] for measurement in measurements}
+        default_measurement_id = (
+            PREFERRED_DEFAULT_MEASUREMENT_ID
+            if PREFERRED_DEFAULT_MEASUREMENT_ID in measurement_ids
+            else measurements[0]["measurement_id"] if measurements else None
+        )
         self.send_json(
             {
                 "measurements": measurements,

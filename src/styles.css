@@ -274,7 +274,31 @@ textarea {
 
 .hero-subtitle-compact {
   max-width: 62rem;
-  white-space: pre-line;
+  display: grid;
+  gap: 0.18rem;
+  font-size: clamp(0.98rem, 1.4vw, 1.12rem);
+  line-height: 1.5;
+}
+
+.hero-meta-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  align-items: baseline;
+  column-gap: 1.15rem;
+}
+
+.hero-meta-text {
+  color: var(--text);
+}
+
+.hero-meta-text-left {
+  justify-self: start;
+  text-align: left;
+}
+
+.hero-meta-text-right {
+  justify-self: end;
+  text-align: right;
 }
 
 .button {
@@ -487,6 +511,20 @@ textarea {
 
 .collapsible-body-description {
   margin: 0;
+}
+
+.measurement-subsection {
+  display: grid;
+  gap: 0.7rem;
+}
+
+.summary-grid-rx {
+  grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
+}
+
+.panel-inline-value {
+  color: var(--text);
+  font-weight: 700;
 }
 
 .timestamp-pill {

@@ -123,8 +123,8 @@
       <section class="hero hero-compact">
         <div class="hero-copy">
           <div class="eyebrow">Results Analyser</div>
-          <h1 class="hero-title hero-title-compact">Antenna Pattern Measurement - Hendrix Tx</h1>
-          <p id="analyserSubtitle" class="hero-subtitle hero-subtitle-compact">Loading DUT_product, DUT_serial_number, and foldername_comment.</p>
+          <h1 id="analyserTitle" class="hero-title hero-title-compact">Antenna Pattern Measurement</h1>
+          <div id="analyserSubtitle" class="hero-subtitle hero-subtitle-compact">Loading test date, tester, DUT_hardware_config, DUT_serial_number, and tx_mode.</div>
         </div>
 
         <div class="hero-actions">
@@ -137,7 +137,7 @@
         <summary class="collapsible-summary">
           <div class="collapsible-title-group">
             <h2 class="section-label">Measurement Details</h2>
-            <p class="panel-description">Selected YAML, measurement folder, global dB ref, and tests found.</p>
+            <p class="panel-description">Selected YAML, global dB ref, and RX path values used in the dBd calculation.</p>
           </div>
         </summary>
 
@@ -148,16 +148,34 @@
               <div id="selectedYamlPath" class="summary-value">-</div>
             </div>
             <div class="summary-item">
-              <span class="summary-label">Measurement Folder</span>
-              <div id="selectedMeasurementName" class="summary-value">-</div>
-            </div>
-            <div class="summary-item">
               <span class="summary-label">Global dB Ref</span>
               <div id="globalPeakValue" class="summary-value">-</div>
             </div>
-            <div class="summary-item">
-              <span class="summary-label">Tests Found</span>
-              <div id="testCountValue" class="summary-value">-</div>
+          </div>
+
+          <div class="measurement-subsection">
+            <div class="section-label">RX Path</div>
+            <div class="summary-grid summary-grid-rx">
+              <div class="summary-item">
+                <span class="summary-label">Antenna</span>
+                <div id="rxAntennaValue" class="summary-value">-</div>
+              </div>
+              <div class="summary-item">
+                <span class="summary-label">Antenna Comment</span>
+                <div id="rxAntennaCommentValue" class="summary-value">-</div>
+              </div>
+              <div class="summary-item">
+                <span class="summary-label">Rx Ant Gain</span>
+                <div id="rxAntennaGainValue" class="summary-value">-</div>
+              </div>
+              <div class="summary-item">
+                <span class="summary-label">Rx Cable Loss</span>
+                <div id="rxCableLossValue" class="summary-value">-</div>
+              </div>
+              <div class="summary-item">
+                <span class="summary-label">Rx Distance</span>
+                <div id="rxDistanceValue" class="summary-value">-</div>
+              </div>
             </div>
           </div>
         </div>
@@ -181,6 +199,7 @@
         </summary>
 
         <div class="collapsible-content">
+          <p class="panel-description collapsible-body-description">Parent folder: <span id="testFolderParentValue" class="panel-inline-value">-</span></p>
           <p class="panel-description collapsible-body-description">These subdirectories sit under the selected YAML and represent the measurements included in the overlay.</p>
           <div id="testFolderList" class="folder-list"></div>
         </div>
@@ -195,6 +214,7 @@
           <div class="plot-section-controls" role="group" aria-label="Plot display mode">
             <button id="plotModeEemaxButton" class="button button-ghost button-small is-active" type="button" data-plot-mode="e_over_emax">E/Emax</button>
             <button id="plotModeDbButton" class="button button-ghost button-small" type="button" data-plot-mode="db">dB</button>
+            <button id="livePlotRefreshButton" class="button button-ghost button-small" type="button" aria-pressed="false">Live Plot Refresh Off</button>
           </div>
         </div>
 
@@ -205,6 +225,6 @@
     </section>
   </main>
 
-  <script src="/src/app.js?v=20260416c"></script>
+  <script src="/src/app.js?v=20260423a"></script>
 </body>
 </html>

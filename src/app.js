@@ -3,6 +3,8 @@ const REFRESH_MS = 2000;
 const MISSING = "\u2014";
 const RESULTS_ROUTE = "/results-analyser";
 const THEME_STORAGE_KEY = "damspy-theme";
+const ANALYSER_DEFAULT_TITLE = "Antenna Pattern Measurement";
+const ANALYSER_TESTER_NAME = "Alistair Morgan";
 const CHANNEL_COLORS = [
   "#66d7ff",
   "#ffb266",
@@ -50,6 +52,7 @@ const measurementElements = {
 const analyserElements = {
   page: document.getElementById("resultsAnalyserPage"),
   banner: document.getElementById("analyserBanner"),
+  title: document.getElementById("analyserTitle"),
   subtitle: document.getElementById("analyserSubtitle"),
   measurementDetailsPanel: document.getElementById("measurementDetailsPanel"),
   testFolderPanel: document.getElementById("testFolderPanel"),
@@ -58,14 +61,19 @@ const analyserElements = {
   yamlPickerPanel: document.getElementById("yamlPickerPanel"),
   yamlOptions: document.getElementById("yamlOptions"),
   selectedYamlPath: document.getElementById("selectedYamlPath"),
-  selectedMeasurementName: document.getElementById("selectedMeasurementName"),
   globalPeakValue: document.getElementById("globalPeakValue"),
-  testCountValue: document.getElementById("testCountValue"),
+  rxAntennaValue: document.getElementById("rxAntennaValue"),
+  rxAntennaCommentValue: document.getElementById("rxAntennaCommentValue"),
+  rxAntennaGainValue: document.getElementById("rxAntennaGainValue"),
+  rxCableLossValue: document.getElementById("rxCableLossValue"),
+  rxDistanceValue: document.getElementById("rxDistanceValue"),
   testFolderSummaryText: document.getElementById("testFolderSummaryText"),
+  testFolderParentValue: document.getElementById("testFolderParentValue"),
   measurementUpdatedAt: document.getElementById("measurementUpdatedAt"),
   testFolderList: document.getElementById("testFolderList"),
   plotGridContainer: document.getElementById("plotGridContainer"),
   plotModeDescription: document.getElementById("plotModeDescription"),
+  livePlotRefreshButton: document.getElementById("livePlotRefreshButton"),
   plotModeButtons: Array.from(document.querySelectorAll("[data-plot-mode]"))
 };
 const themeElements = {
@@ -87,7 +95,9 @@ const analyserState = {
   plotDisplayMode: PLOT_DISPLAY_MODES.E_OVER_EMAX,
   pickerOpen: false,
   listRequestInFlight: false,
-  dataRequestSerial: 0
+  dataRequestSerial: 0,
+  dataRequestInFlight: false,
+  liveRefreshEnabled: false
 };
 const uiState = {
   theme: "dark"
@@ -158,6 +168,11 @@ function formatDbd(value) {
   return Number.isFinite(numericValue) ? numericValue.toFixed(1) + " dBd" : MISSING;
 }
 
+function formatDbi(value) {
+  const numericValue = Number(value);
+  return Number.isFinite(numericValue) ? numericValue.toFixed(1) + " dBi" : MISSING;
+}
+
 function formatSignedDb(value) {
   const numericValue = Number(value);
   if (!Number.isFinite(numericValue)) {
@@ -174,6 +189,11 @@ function formatEOverEmax(value) {
 function formatDegrees(value) {
   const formatted = formatNumber(value, 1);
   return formatted === MISSING ? MISSING : formatted + "\u00b0";
+}
+
+function formatMeters(value) {
+  const formatted = formatNumber(value, 2);
+  return formatted === MISSING ? MISSING : formatted + " m";
 }
 
 function formatProgress(indexValue, totalValue) {
@@ -193,6 +213,19 @@ function formatLocalDateTime(value) {
   }
 
   return date.toLocaleString();
+}
+
+function formatLocalDate(value) {
+  if (!value || value === MISSING) {
+    return MISSING;
+  }
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return String(value);
+  }
+
+  return date.toLocaleDateString();
 }
 
 function formatChannelLabel(channel) {
@@ -230,12 +263,49 @@ function formatYamlSummaryValue(value) {
   return String(value);
 }
 
-function buildAnalyserSubtitle(data) {
+function buildAnalyserTitle(data) {
+  const product = data && data.dut_product !== null && data.dut_product !== undefined
+    ? String(data.dut_product).trim()
+    : "";
+
+  return product ? ANALYSER_DEFAULT_TITLE + " - " + product : ANALYSER_DEFAULT_TITLE;
+}
+
+function buildAnalyserSubtitleRows(data) {
   return [
-    'DUT_product: "' + formatYamlSummaryValue(data.dut_product) + '"',
-    'DUT_serial_number: "' + formatYamlSummaryValue(data.dut_serial_number) + '"',
-    'foldername_comment: "' + formatYamlSummaryValue(data.foldername_comment) + '"'
-  ].join("\n");
+    {
+      left: "DUT_hardware_config: " + formatYamlSummaryValue(data.dut_hardware_config),
+      right: "Test date: " + formatLocalDate(data.yaml_created_at)
+    },
+    {
+      left: "DUT_serial_number: " + formatYamlSummaryValue(data.dut_serial_number),
+      right: "Tester: " + ANALYSER_TESTER_NAME
+    },
+    {
+      left: "tx_mode: " + formatYamlSummaryValue(data.tx_mode),
+      right: ""
+    }
+  ];
+}
+
+function renderAnalyserSubtitleRows(data) {
+  analyserElements.subtitle.replaceChildren();
+
+  for (const rowData of buildAnalyserSubtitleRows(data)) {
+    const row = document.createElement("div");
+    row.className = "hero-meta-row";
+
+    const left = document.createElement("span");
+    left.className = "hero-meta-text hero-meta-text-left";
+    left.textContent = rowData.left;
+
+    const right = document.createElement("span");
+    right.className = "hero-meta-text hero-meta-text-right";
+    right.textContent = rowData.right;
+
+    row.append(left, right);
+    analyserElements.subtitle.append(row);
+  }
 }
 
 function buildTestFolderSummary(data) {
@@ -476,15 +546,27 @@ async function loadMeasurementList(options = {}) {
   }
 }
 
-async function loadMeasurementDataset(measurementId) {
+async function loadMeasurementDataset(measurementId, options = {}) {
+  const background = options.background === true;
+
   if (!measurementId) {
     renderAnalyserEmpty("Select a measurement to view its results.");
     return;
   }
 
+  if (analyserState.dataRequestInFlight) {
+    return;
+  }
+
+  const shouldShowLoadingState = !background || !analyserState.dataset || analyserState.selectedMeasurementId !== measurementId;
   analyserState.selectedMeasurementId = measurementId;
+  analyserState.dataRequestInFlight = true;
   const requestId = ++analyserState.dataRequestSerial;
-  analyserElements.subtitle.textContent = "Loading " + measurementId + "...";
+
+  if (shouldShowLoadingState) {
+    analyserElements.title.textContent = ANALYSER_DEFAULT_TITLE;
+    analyserElements.subtitle.textContent = "Loading " + measurementId + "...";
+  }
 
   try {
     const data = await fetchJson("/api/results-analyser/data?measurement_id=" + encodeURIComponent(measurementId));
@@ -502,8 +584,16 @@ async function loadMeasurementDataset(measurementId) {
     }
 
     const message = error instanceof Error ? error.message : "Unknown error";
+
+    if (background && analyserState.dataset) {
+      setBanner(analyserElements.banner, "warning", "Live plot refresh failed: " + message);
+      return;
+    }
+
     setBanner(analyserElements.banner, "error", "Unable to load analyser data: " + message);
     renderAnalyserEmpty("The selected measurement could not be parsed.");
+  } finally {
+    analyserState.dataRequestInFlight = false;
   }
 }
 
@@ -516,6 +606,22 @@ async function ensureAnalyserReady() {
   if (!analyserState.dataset && analyserState.selectedMeasurementId) {
     await loadMeasurementDataset(analyserState.selectedMeasurementId);
   }
+}
+
+async function refreshAnalyserDataIfLive() {
+  if (!analyserState.liveRefreshEnabled) {
+    return;
+  }
+
+  if (getCurrentRoute() !== RESULTS_ROUTE) {
+    return;
+  }
+
+  if (!analyserState.selectedMeasurementId) {
+    return;
+  }
+
+  await loadMeasurementDataset(analyserState.selectedMeasurementId, { background: true });
 }
 
 function renderYamlPicker() {
@@ -553,12 +659,17 @@ function renderYamlPicker() {
 
 function renderAnalyserEmpty(message) {
   analyserState.dataset = null;
+  analyserElements.title.textContent = ANALYSER_DEFAULT_TITLE;
   analyserElements.subtitle.textContent = message;
   analyserElements.selectedYamlPath.textContent = MISSING;
-  analyserElements.selectedMeasurementName.textContent = MISSING;
   analyserElements.globalPeakValue.textContent = MISSING;
-  analyserElements.testCountValue.textContent = MISSING;
+  analyserElements.rxAntennaValue.textContent = MISSING;
+  analyserElements.rxAntennaCommentValue.textContent = MISSING;
+  analyserElements.rxAntennaGainValue.textContent = MISSING;
+  analyserElements.rxCableLossValue.textContent = MISSING;
+  analyserElements.rxDistanceValue.textContent = MISSING;
   analyserElements.testFolderSummaryText.textContent = "Folders/tests = -";
+  analyserElements.testFolderParentValue.textContent = MISSING;
   analyserElements.measurementUpdatedAt.textContent = MISSING;
   analyserElements.testFolderList.replaceChildren();
   analyserElements.plotGridContainer.replaceChildren();
@@ -584,13 +695,30 @@ function updatePlotModeUi() {
   }
 }
 
+function updateLivePlotRefreshButton() {
+  if (!analyserElements.livePlotRefreshButton) {
+    return;
+  }
+
+  analyserElements.livePlotRefreshButton.classList.toggle("is-active", analyserState.liveRefreshEnabled);
+  analyserElements.livePlotRefreshButton.textContent = analyserState.liveRefreshEnabled
+    ? "Live Plot Refresh On"
+    : "Live Plot Refresh Off";
+  analyserElements.livePlotRefreshButton.setAttribute("aria-pressed", String(analyserState.liveRefreshEnabled));
+}
+
 function renderAnalyserData(data) {
-  analyserElements.subtitle.textContent = buildAnalyserSubtitle(data);
+  analyserElements.title.textContent = buildAnalyserTitle(data);
+  renderAnalyserSubtitleRows(data);
   analyserElements.selectedYamlPath.textContent = data.yaml_relative_path || MISSING;
-  analyserElements.selectedMeasurementName.textContent = data.measurement_name || MISSING;
   analyserElements.globalPeakValue.textContent = formatDbm(data.global_peak_dbm);
-  analyserElements.testCountValue.textContent = String(data.folders.length);
+  analyserElements.rxAntennaValue.textContent = data.rx_antenna_name || MISSING;
+  analyserElements.rxAntennaCommentValue.textContent = data.rx_antenna_comment || MISSING;
+  analyserElements.rxAntennaGainValue.textContent = formatDbi(data.rx_antenna_gain_dbi);
+  analyserElements.rxCableLossValue.textContent = formatDb(data.rx_cable_loss_db);
+  analyserElements.rxDistanceValue.textContent = formatMeters(data.rx_dist_m);
   analyserElements.testFolderSummaryText.textContent = buildTestFolderSummary(data);
+  analyserElements.testFolderParentValue.textContent = data.measurement_name || MISSING;
   analyserElements.measurementUpdatedAt.textContent = "Updated " + formatLocalDateTime(data.updated_at);
 
   updatePlotModeUi();
@@ -747,7 +875,7 @@ function renderPlotGrid(data) {
 
   const corner = document.createElement("div");
   corner.className = "plot-grid-corner";
-  corner.textContent = "Orientation \\ Polarisation";
+  corner.textContent = "Orientation";
   grid.append(corner);
 
   for (const column of data.rows) {
@@ -1232,6 +1360,18 @@ function bindAnalyserControls() {
     renderYamlPicker();
   });
 
+  if (analyserElements.livePlotRefreshButton) {
+    analyserElements.livePlotRefreshButton.addEventListener("click", async () => {
+      analyserState.liveRefreshEnabled = !analyserState.liveRefreshEnabled;
+      updateLivePlotRefreshButton();
+
+      if (analyserState.liveRefreshEnabled) {
+        await ensureAnalyserReady();
+        await refreshAnalyserDataIfLive();
+      }
+    });
+  }
+
   for (const button of analyserElements.plotModeButtons) {
     button.addEventListener("click", () => {
       const nextMode = button.dataset.plotMode;
@@ -1271,6 +1411,8 @@ bindThemeControls();
 initialiseCollapsedAnalyserPanels();
 applyTheme(readStoredTheme());
 updatePlotModeUi();
+updateLivePlotRefreshButton();
 renderRoute();
 refreshMeasurementData();
 window.setInterval(refreshMeasurementData, REFRESH_MS);
+window.setInterval(refreshAnalyserDataIfLive, REFRESH_MS);
