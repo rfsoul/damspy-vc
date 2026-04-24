@@ -1321,7 +1321,8 @@ function createPlotReadoutOverlay(width) {
     x: width - overlayWidth - 14,
     y: 14,
     width: overlayWidth,
-    height: 56
+    height: 0,
+    visibility: "hidden"
   });
 
   const container = document.createElement("div");
@@ -1358,18 +1359,12 @@ function updatePlotReadout(readout, angle, rows, pinned, mode) {
   readout.container.replaceChildren();
 
   if (angle === null || !rows.length) {
-    const title = document.createElement("div");
-    title.className = "plot-readout-title";
-    title.textContent = "Cursor Readout";
-
-    const hint = document.createElement("div");
-    hint.className = "plot-readout-hint";
-    hint.textContent = "Hover to inspect values. Click to pin the current angle.";
-
-    readout.container.append(title, hint);
-    readout.foreignObject.setAttribute("height", String(readout.minHeight));
+    readout.foreignObject.setAttribute("visibility", "hidden");
+    readout.foreignObject.setAttribute("height", "0");
     return;
   }
+
+  readout.foreignObject.setAttribute("visibility", "visible");
 
   const title = document.createElement("div");
   title.className = "plot-readout-title";
