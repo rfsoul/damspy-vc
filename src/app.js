@@ -1583,19 +1583,6 @@ function createPlotSvg(preparedPlot, row, column, mode) {
     }));
   }
 
-  const crosshair = createSvgElement("line", {
-    class: "crosshair",
-    x1: centerX,
-    y1: centerY,
-    x2: centerX,
-    y2: centerY - radius,
-    visibility: "hidden",
-    stroke: svgPalette.crosshairStroke,
-    "stroke-width": 1.2,
-    "stroke-dasharray": "4 4"
-  });
-  svg.append(crosshair);
-
   const markerLayer = createSvgElement("g");
   svg.append(markerLayer);
 
@@ -1616,7 +1603,6 @@ function createPlotSvg(preparedPlot, row, column, mode) {
   let pinned = false;
 
   function clearHover() {
-    crosshair.setAttribute("visibility", "hidden");
     markerLayer.replaceChildren();
     updatePlotReadout(readout, null, [], false, mode);
   }
@@ -1629,14 +1615,8 @@ function createPlotSvg(preparedPlot, row, column, mode) {
       return;
     }
 
-    const crosshairEnd = polarToCartesian(nearestAngle, yMax);
     const rows = [];
     markerLayer.replaceChildren();
-    crosshair.setAttribute("visibility", "visible");
-    crosshair.setAttribute("x1", centerX);
-    crosshair.setAttribute("y1", centerY);
-    crosshair.setAttribute("x2", crosshairEnd.x);
-    crosshair.setAttribute("y2", crosshairEnd.y);
 
     for (const entry of preparedPlot.series) {
       const point = entry.points.find((candidate) => Number(candidate.angle_deg) === nearestAngle);
