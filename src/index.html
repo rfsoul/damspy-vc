@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>DAMSpy Visualiser</title>
-  <link rel="stylesheet" href="/src/styles.css">
+  <link rel="stylesheet" href="/src/styles.css?v=20260416c">
 </head>
 <body>
   <main class="app-shell">
@@ -14,10 +14,13 @@
         <span class="topbar-title">Visualiser</span>
       </div>
 
-      <nav class="topbar-nav" aria-label="Pages">
-        <button class="button button-ghost" data-route="/">Current Measurement</button>
-        <button class="button button-ghost" data-route="/results-analyser">Results Analyser</button>
-      </nav>
+      <div class="topbar-actions">
+        <nav class="topbar-nav" aria-label="Pages">
+          <button class="button button-ghost" data-route="/">Current Measurement</button>
+          <button class="button button-ghost" data-route="/results-analyser">Results Analyser</button>
+        </nav>
+        <button id="themeToggleButton" class="button button-ghost" type="button">Light Mode</button>
+      </div>
     </header>
 
     <section id="measurementPage" class="page">
@@ -28,10 +31,6 @@
           <div class="eyebrow">DAMSpy WOYM</div>
           <h1 id="testGroup" class="hero-title">Loading...</h1>
           <p id="testMethod" class="hero-subtitle">Waiting for data</p>
-        </div>
-
-        <div class="hero-actions">
-          <button class="button button-primary" data-route="/results-analyser">Open Results Analyser</button>
         </div>
       </section>
 
@@ -124,8 +123,8 @@
       <section class="hero hero-compact">
         <div class="hero-copy">
           <div class="eyebrow">Results Analyser</div>
-          <h1 class="hero-title hero-title-compact">Overlaid Azimuth Results</h1>
-          <p id="analyserSubtitle" class="hero-subtitle hero-subtitle-compact">Loading the newest 1_meas_azimuth.yaml.</p>
+          <h1 id="analyserTitle" class="hero-title hero-title-compact">Antenna Pattern Measurement</h1>
+          <div id="analyserSubtitle" class="hero-subtitle hero-subtitle-compact">Loading test date, tester, DUT_hardware_config, DUT_serial_number, and tx_mode.</div>
         </div>
 
         <div class="hero-actions">
@@ -134,53 +133,90 @@
         </div>
       </section>
 
-      <section class="panel analyser-summary-panel">
-        <div class="summary-grid">
-          <div class="summary-item">
-            <span class="summary-label">Selected YAML</span>
-            <div id="selectedYamlPath" class="summary-value">-</div>
+      <details id="measurementDetailsPanel" class="panel collapsible-panel analyser-summary-panel">
+        <summary class="collapsible-summary">
+          <div class="collapsible-title-group">
+            <h2 class="section-label">Measurement Details</h2>
+            <p class="panel-description">Selected YAML, global dB ref, and RX path values used in the dBd calculation.</p>
           </div>
-          <div class="summary-item">
-            <span class="summary-label">Measurement Folder</span>
-            <div id="selectedMeasurementName" class="summary-value">-</div>
-          </div>
-          <div class="summary-item">
-            <span class="summary-label">Normalised To</span>
-            <div id="globalPeakValue" class="summary-value">-</div>
-          </div>
-          <div class="summary-item">
-            <span class="summary-label">Tests Found</span>
-            <div id="testCountValue" class="summary-value">-</div>
-          </div>
-        </div>
+        </summary>
 
-        <div id="yamlPickerPanel" class="yaml-picker" hidden>
-          <div class="picker-header">
-            <h2 class="picker-title">Discovered YAML Files</h2>
-            <button id="yamlRefreshButton" class="button button-ghost button-small" type="button">Refresh List</button>
+        <div class="collapsible-content">
+          <div class="summary-grid">
+            <div class="summary-item">
+              <span class="summary-label">Selected YAML</span>
+              <div id="selectedYamlPath" class="summary-value">-</div>
+            </div>
+            <div class="summary-item">
+              <span class="summary-label">Global dB Ref</span>
+              <div id="globalPeakValue" class="summary-value">-</div>
+            </div>
           </div>
-          <div id="yamlOptions" class="yaml-options"></div>
+
+          <div class="measurement-subsection">
+            <div class="section-label">RX Path</div>
+            <div class="summary-grid summary-grid-rx">
+              <div class="summary-item">
+                <span class="summary-label">Antenna</span>
+                <div id="rxAntennaValue" class="summary-value">-</div>
+              </div>
+              <div class="summary-item">
+                <span class="summary-label">Antenna Comment</span>
+                <div id="rxAntennaCommentValue" class="summary-value">-</div>
+              </div>
+              <div class="summary-item">
+                <span class="summary-label">Rx Ant Gain</span>
+                <div id="rxAntennaGainValue" class="summary-value">-</div>
+              </div>
+              <div class="summary-item">
+                <span class="summary-label">Rx Cable Loss</span>
+                <div id="rxCableLossValue" class="summary-value">-</div>
+              </div>
+              <div class="summary-item">
+                <span class="summary-label">Rx Distance</span>
+                <div id="rxDistanceValue" class="summary-value">-</div>
+              </div>
+            </div>
+          </div>
         </div>
+      </details>
+
+      <section id="yamlPickerPanel" class="panel yaml-picker-panel" hidden>
+        <div class="picker-header">
+          <h2 class="picker-title">Discovered YAML Files</h2>
+          <button id="yamlRefreshButton" class="button button-ghost button-small" type="button">Refresh List</button>
+        </div>
+        <div id="yamlOptions" class="yaml-options"></div>
       </section>
 
-      <section class="panel">
-        <div class="section-heading">
-          <div>
+      <details id="testFolderPanel" class="panel collapsible-panel">
+        <summary class="collapsible-summary">
+          <div class="collapsible-title-group">
             <h2 class="section-label">Detected Test Folders</h2>
-            <p class="panel-description">These subdirectories sit under the selected YAML and represent the measurements included in the overlay.</p>
+            <p id="testFolderSummaryText" class="panel-description">Folders/tests = -</p>
           </div>
           <div id="measurementUpdatedAt" class="timestamp-pill">-</div>
-        </div>
-        <div id="testFolderList" class="folder-list"></div>
-      </section>
+        </summary>
 
-      <section class="panel">
+        <div class="collapsible-content">
+          <p class="panel-description collapsible-body-description">Parent folder: <span id="testFolderParentValue" class="panel-inline-value">-</span></p>
+          <p class="panel-description collapsible-body-description">These subdirectories sit under the selected YAML and represent the measurements included in the overlay.</p>
+          <div id="testFolderList" class="folder-list"></div>
+        </div>
+      </details>
+
+      <section class="panel plot-panel">
         <div class="section-heading section-heading-stack">
           <div>
             <h2 class="section-label">Polarisation / Orientation Grid</h2>
-            <p class="panel-description">Hover to inspect values on the chart. Click a chart to pin the readout. Toggle channel delta to compare the strongest and weakest power trace available for each channel.</p>
+            <p id="plotModeDescription" class="panel-description">Hover to inspect values. Click a chart to pin the readout. Each plot normalises its overlaid channels to that plot's strongest point in E/Emax form, with dB guide circles from -3 dB to -20 dB.</p>
           </div>
-          <button id="differenceOverlayButton" class="button button-ghost button-small" type="button">Show Channel Delta</button>
+          <div class="plot-section-controls" role="group" aria-label="Plot display mode">
+            <button id="plotModeEemaxButton" class="button button-ghost button-small is-active" type="button" data-plot-mode="e_over_emax">E/Emax</button>
+            <button id="plotModeDbButton" class="button button-ghost button-small" type="button" data-plot-mode="db">dB</button>
+            <button id="differenceOverlayButton" class="button button-ghost button-small" type="button">Show Channel Delta</button>
+            <button id="livePlotRefreshButton" class="button button-ghost button-small" type="button" aria-pressed="false">Live Plot Refresh Off</button>
+          </div>
         </div>
 
         <div id="plotGridContainer" class="plot-grid-container">
@@ -190,6 +226,6 @@
     </section>
   </main>
 
-  <script src="/src/app.js"></script>
+  <script src="/src/app.js?v=20260423a"></script>
 </body>
 </html>

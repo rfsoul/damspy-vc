@@ -21,6 +21,12 @@ from urllib.parse import parse_qs, unquote, urlsplit
 
 
 KNOWN_ROUTES = {"/", "/results-analyser", "/results-analyser/"}
+PREFERRED_DEFAULT_MEASUREMENT_ID = (
+    "_best/"
+    "Antenna_Pattern_Measurement-2026-04-10_11-22-16-"
+    "hendrix-tx_V3-04F_002-bodyworn-Ori_ori1_ori2-Ch_0_40_80-"
+    "Pwr_10-Pol_H_V-Step_2deg-RxAnt_Horn_WR340"
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -80,6 +86,264 @@ def read_json_file(path: Path) -> dict[str, Any]:
         return json.load(handle)
 
 
+def strip_yaml_inline_comment(value: str) -> str:
+    in_single_quote = False
+    in_double_quote = False
+
+    for index, char in enumerate(value):
+        if char == "'" and not in_double_quote:
+            in_single_quote = not in_single_quote
+            continue
+
+        if char == '"' and not in_single_quote:
+            in_double_quote = not in_double_quote
+            continue
+
+        if char == "#" and not in_single_quote and not in_double_quote:
+            return value[:index].rstrip()
+
+    return value.rstrip()
+
+
+def parse_yaml_scalar(raw_value: str) -> Any:
+    value = strip_yaml_inline_comment(raw_value).strip()
+
+    if not value:
+        return None
+
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
+        return value[1:-1]
+
+    if re.fullmatch(r"[-+]?\d+", value):
+        try:
+            return int(value)
+        except ValueError:
+            return value
+
+    if re.fullmatch(r"[-+]?(?:\d+\.\d*|\d*\.\d+)(?:[eE][-+]?\d+)?", value):
+        try:
+            return float(value)
+        except ValueError:
+            return value
+
+    return value
+
+
+def coerce_float(value: Any) -> float | None:
+    if value is None:
+        return None
+
+    try:
+        numeric_value = float(value)
+    except (TypeError, ValueError):
+        return None
+
+    return numeric_value if math.isfinite(numeric_value) else None
+
+
+def read_yaml_summary_fields(path: Path) -> dict[str, Any]:
+    field_values: dict[str, Any] = {
+        "dut_product": None,
+        "dut_hardware_config": None,
+        "dut_serial_number": None,
+        "tx_mode": None,
+        "foldername_comment": None,
+        "orientation_photo_location": None,
+        "rx_antenna_name": None,
+        "rx_antenna_comment": None,
+        "tx_cable_loss_db": None,
+        "tx_power_dbm": None,
+        "rx_antenna_gain_dbi": None,
+        "rx_cable_loss_db": None,
+        "rx_dist_m": None,
+    }
+    top_level_fields = {
+        "DUT_product": "dut_product",
+        "DUT_hardware_config": "dut_hardware_config",
+        "DUT_serial_number": "dut_serial_number",
+        "tx_mode": "tx_mode",
+        "Tx_mode": "tx_mode",
+        "foldername_comment": "foldername_comment",
+        "orientation_photo_location": "orientation_photo_location",
+    }
+    section_fields = {
+        "sig_gen_1": {
+            "tx_mode": "tx_mode",
+            "tx_cable_loss": "tx_cable_loss_db",
+            "tx_power": "tx_power_dbm",
+        },
+        "rx_path": {
+            "antenna": "rx_antenna_name",
+            "antenna_comment": "rx_antenna_comment",
+            "rx_antena_gain": "rx_antenna_gain_dbi",
+            "rx_antenna_gain": "rx_antenna_gain_dbi",
+            "rx_cable_loss": "rx_cable_loss_db",
+            "rx_cable_loss_2.45Ghz": "rx_cable_loss_db",
+            "rx_dist_m": "rx_dist_m",
+        },
+    }
+    active_section: str | None = None
+
+    with open(extended_path(path), "r", encoding="utf-8") as handle:
+        for raw_line in handle:
+            line = raw_line.rstrip("\r\n")
+            content = strip_yaml_inline_comment(line)
+            stripped = content.strip()
+
+            if not stripped:
+                continue
+
+            indent = len(content) - len(content.lstrip(" "))
+
+            if indent == 0:
+                active_section = None
+
+                if stripped.endswith(":"):
+                    section_name = stripped[:-1].strip()
+                    active_section = section_name if section_name in section_fields else None
+                    continue
+
+                if ":" not in stripped:
+                    continue
+
+                key, raw_value = stripped.split(":", 1)
+                mapped_key = top_level_fields.get(key.strip())
+                if mapped_key is None:
+                    continue
+
+                field_values[mapped_key] = parse_yaml_scalar(raw_value)
+                continue
+
+            if active_section is None or ":" not in stripped:
+                continue
+
+            key, raw_value = stripped.split(":", 1)
+            mapped_key = section_fields.get(active_section, {}).get(key.strip())
+            if mapped_key is None:
+                continue
+
+            field_values[mapped_key] = parse_yaml_scalar(raw_value)
+
+    field_values["tx_cable_loss_db"] = coerce_float(field_values["tx_cable_loss_db"])
+    field_values["tx_power_dbm"] = coerce_float(field_values["tx_power_dbm"])
+    field_values["rx_antenna_gain_dbi"] = coerce_float(field_values["rx_antenna_gain_dbi"])
+    field_values["rx_cable_loss_db"] = coerce_float(field_values["rx_cable_loss_db"])
+    field_values["rx_dist_m"] = coerce_float(field_values["rx_dist_m"])
+
+    return field_values
+
+
+def free_space_path_loss_db(frequency_hz: Any, distance_m: Any) -> float | None:
+    frequency = coerce_float(frequency_hz)
+    distance = coerce_float(distance_m)
+
+    if frequency is None or distance is None or frequency <= 0 or distance <= 0:
+        return None
+
+    return 20.0 * math.log10((4.0 * math.pi * distance * frequency) / 299_792_458.0)
+
+
+def calculate_eirp_dbm(
+    peak_dbm: Any,
+    frequency_hz: Any,
+    rx_cable_loss_db: Any,
+    rx_antenna_gain_dbi: Any,
+    rx_dist_m: Any,
+) -> float | None:
+    peak = coerce_float(peak_dbm)
+    rx_cable_loss = coerce_float(rx_cable_loss_db)
+    rx_antenna_gain = coerce_float(rx_antenna_gain_dbi)
+    path_loss = free_space_path_loss_db(frequency_hz, rx_dist_m)
+
+    if peak is None or rx_cable_loss is None or rx_antenna_gain is None or path_loss is None:
+        return None
+
+    return peak + rx_cable_loss - rx_antenna_gain + path_loss
+
+
+def calculate_gain_dbd(eirp_dbm: Any, tx_power_dbm: Any, tx_cable_loss_db: Any) -> float | None:
+    eirp = coerce_float(eirp_dbm)
+    tx_power = coerce_float(tx_power_dbm)
+    tx_cable_loss = coerce_float(tx_cable_loss_db)
+
+    if eirp is None or tx_power is None or tx_cable_loss is None:
+        return None
+
+    return eirp - (tx_power - tx_cable_loss) - 2.15
+
+
+def display_path(path: Path, root: Path) -> str:
+    resolved_path = path.resolve(strict=False)
+    resolved_root = root.resolve(strict=False)
+
+    try:
+        return resolved_path.relative_to(resolved_root).as_posix()
+    except ValueError:
+        return str(resolved_path)
+
+
+def lookup_key(value: Any) -> str:
+    return re.sub(r"[^a-z0-9]+", "", str(value).lower())
+
+
+def resolve_orientation_photo_dir(logs_root: Path, measurement_dir: Path, raw_location: Any) -> Path | None:
+    if raw_location is None:
+        return None
+
+    raw_text = str(raw_location).strip()
+    if not raw_text:
+        return None
+
+    configured_path = Path(raw_text)
+    candidate_paths = [configured_path] if configured_path.is_absolute() else [measurement_dir / configured_path, logs_root / configured_path]
+
+    for candidate in candidate_paths:
+        if path_is_dir(candidate):
+            return candidate
+
+    return None
+
+
+def build_orientation_image_map(
+    logs_root: Path,
+    measurement_dir: Path,
+    raw_location: Any,
+    orientations: list[str],
+) -> dict[str, str]:
+    photo_dir = resolve_orientation_photo_dir(logs_root, measurement_dir, raw_location)
+    if photo_dir is None:
+        return {}
+
+    files_by_key: dict[str, Path] = {}
+
+    try:
+        entries = iter_directory(photo_dir)
+    except OSError:
+        return {}
+
+    for entry in entries:
+        if not entry.is_file():
+            continue
+
+        image_path = photo_dir / entry.name
+        suffix = image_path.suffix.lower()
+        if suffix not in {".jpg", ".jpeg", ".png", ".webp"}:
+            continue
+
+        files_by_key[lookup_key(image_path.stem)] = image_path
+
+    image_map: dict[str, str] = {}
+
+    for orientation in orientations:
+        image_path = files_by_key.get(lookup_key(orientation))
+        if image_path is None:
+            continue
+
+        image_map[str(orientation)] = "/DAMspy-core/src/DAMspy_logs/" + display_path(image_path, logs_root)
+
+    return image_map
+
+
 def read_csv_points(path: Path, axis_key: str) -> list[dict[str, float]]:
     points: list[dict[str, float]] = []
 
@@ -111,6 +375,12 @@ def read_csv_points(path: Path, axis_key: str) -> list[dict[str, float]]:
 
 def format_timestamp(timestamp: float) -> str:
     return datetime.fromtimestamp(timestamp, tz=timezone.utc).isoformat()
+
+
+def get_file_created_timestamp(path: Path) -> float:
+    stat_result = os.stat(extended_path(path))
+    created_at = getattr(stat_result, "st_birthtime", None)
+    return created_at if created_at is not None else stat_result.st_ctime
 
 
 def measurement_name_timestamp(value: str) -> float | None:
@@ -147,23 +417,56 @@ def polarisation_sort_key(value: Any) -> tuple[int, str]:
     return order, text
 
 
-def measurement_manifest(logs_root: Path, measurement_name: str) -> dict[str, Any] | None:
-    measurement_dir = logs_root / measurement_name
+def iter_measurement_directories(logs_root: Path) -> list[Path]:
+    if not path_is_dir(logs_root):
+        return []
+
+    discovered: list[Path] = []
+    pending = [logs_root]
+
+    while pending:
+        current_dir = pending.pop()
+
+        try:
+            entries = iter_directory(current_dir)
+        except OSError:
+            continue
+
+        yaml_path = current_dir / "1_meas_azimuth.yaml"
+        if path_is_file(yaml_path):
+            discovered.append(current_dir)
+
+        for entry in entries:
+            if not entry.is_dir():
+                continue
+
+            if entry.name == "1_meas_azimuth":
+                continue
+
+            pending.append(current_dir / entry.name)
+
+    return discovered
+
+
+def measurement_manifest(logs_root: Path, measurement_dir: Path) -> dict[str, Any] | None:
     yaml_path = measurement_dir / "1_meas_azimuth.yaml"
 
     if not path_is_dir(measurement_dir) or not path_is_file(yaml_path):
         return None
 
+    measurement_id = display_path(measurement_dir, logs_root)
+    measurement_name = measurement_dir.name
+
     updated_at = max(
         os.stat(extended_path(measurement_dir)).st_mtime,
         os.stat(extended_path(yaml_path)).st_mtime,
     )
-    measurement_timestamp = measurement_name_timestamp(measurement_name)
+    measurement_timestamp = measurement_name_timestamp(measurement_id)
 
     return {
-        "measurement_id": measurement_name,
+        "measurement_id": measurement_id,
         "measurement_name": measurement_name,
-        "yaml_relative_path": f"{measurement_name}/1_meas_azimuth.yaml",
+        "yaml_relative_path": display_path(yaml_path, logs_root),
         "updated_at": format_timestamp(updated_at),
         "_updated_at": updated_at,
         "_sort_at": measurement_timestamp if measurement_timestamp is not None else updated_at,
@@ -171,16 +474,10 @@ def measurement_manifest(logs_root: Path, measurement_name: str) -> dict[str, An
 
 
 def list_measurements(logs_root: Path) -> list[dict[str, Any]]:
-    if not path_is_dir(logs_root):
-        return []
-
     manifests: list[dict[str, Any]] = []
 
-    for entry in iter_directory(logs_root):
-        if not entry.is_dir():
-            continue
-
-        manifest = measurement_manifest(logs_root, entry.name)
+    for measurement_dir in iter_measurement_directories(logs_root):
+        manifest = measurement_manifest(logs_root, measurement_dir)
         if manifest is not None:
             manifests.append(manifest)
 
@@ -217,13 +514,14 @@ def find_first_csv(path: Path) -> Path | None:
 
 def load_measurement_dataset(logs_root: Path, measurement_id: str) -> dict[str, Any]:
     measurement_dir, yaml_path, results_dir = resolve_measurement(logs_root, measurement_id)
-
     if not path_is_file(yaml_path):
         raise FileNotFoundError(f"Could not find {yaml_path.name} for {measurement_id}")
 
     if not path_is_dir(results_dir):
         raise FileNotFoundError(f"Could not find results directory for {measurement_id}")
 
+    yaml_summary = read_yaml_summary_fields(yaml_path)
+    yaml_created_at = format_timestamp(get_file_created_timestamp(yaml_path))
     folders: list[dict[str, Any]] = []
     plot_groups: dict[tuple[str, str], dict[str, Any]] = {}
     global_peak_dbm: float | None = None
@@ -257,18 +555,54 @@ def load_measurement_dataset(logs_root: Path, measurement_id: str) -> dict[str, 
         if not points:
             continue
 
-        peak_dbm = max(point["rx_peak_dbm"] for point in points)
+        peak_point = max(points, key=lambda point: point["rx_peak_dbm"])
+        peak_dbm = peak_point["rx_peak_dbm"]
         global_peak_dbm = peak_dbm if global_peak_dbm is None else max(global_peak_dbm, peak_dbm)
 
         series_info = metadata.get("sig_gen_1") or {}
+        rx_path_info = metadata.get("rx_path") or {}
+        frequency_hz = peak_point.get("peak_freq_hz") or series_info.get("frequency_hz") or (metadata.get("spec_an_1") or {}).get("center_frequency_hz")
+        tx_power_dbm = coerce_float(series_info.get("tx_power"))
+        if tx_power_dbm is None:
+            tx_power_dbm = coerce_float(yaml_summary.get("tx_power_dbm"))
+        tx_cable_loss_db = coerce_float(series_info.get("tx_cable_loss"))
+        if tx_cable_loss_db is None:
+            tx_cable_loss_db = coerce_float(yaml_summary.get("tx_cable_loss_db"))
+        rx_antenna_gain_dbi = coerce_float(rx_path_info.get("rx_antenna_gain"))
+        if rx_antenna_gain_dbi is None:
+            rx_antenna_gain_dbi = coerce_float(rx_path_info.get("rx_antena_gain"))
+        if rx_antenna_gain_dbi is None:
+            rx_antenna_gain_dbi = coerce_float(yaml_summary.get("rx_antenna_gain_dbi"))
+        rx_cable_loss_db = coerce_float(rx_path_info.get("rx_cable_loss"))
+        if rx_cable_loss_db is None:
+            rx_cable_loss_db = coerce_float(rx_path_info.get("rx_cable_loss_2.45Ghz"))
+        if rx_cable_loss_db is None:
+            rx_cable_loss_db = coerce_float(yaml_summary.get("rx_cable_loss_db"))
+        rx_dist_m = coerce_float(rx_path_info.get("rx_dist_m"))
+        if rx_dist_m is None:
+            rx_dist_m = coerce_float(yaml_summary.get("rx_dist_m"))
+        eirp_dbm = calculate_eirp_dbm(
+            peak_dbm,
+            frequency_hz,
+            rx_cable_loss_db,
+            rx_antenna_gain_dbi,
+            rx_dist_m,
+        )
+        gain_dbd = calculate_gain_dbd(
+            eirp_dbm,
+            tx_power_dbm,
+            tx_cable_loss_db,
+        )
         folder_record = {
             "folder_name": entry.name,
             "orientation": metadata.get("orientation") or "unknown",
             "polarisation": metadata.get("polarisation") or "unknown",
             "channel": series_info.get("channel"),
             "power_level": series_info.get("power_level"),
-            "frequency_hz": series_info.get("frequency_hz"),
+            "frequency_hz": frequency_hz,
             "peak_dbm": peak_dbm,
+            "eirp_dbm": eirp_dbm,
+            "gain_dbd": gain_dbd,
             "points": points,
         }
         folders.append(folder_record)
@@ -296,11 +630,14 @@ def load_measurement_dataset(logs_root: Path, measurement_id: str) -> dict[str, 
         return {
             "measurement_id": measurement_id,
             "measurement_name": measurement_dir.name,
-            "yaml_relative_path": f"{measurement_dir.name}/1_meas_azimuth.yaml",
+            "yaml_relative_path": display_path(yaml_path, logs_root),
+            "yaml_created_at": yaml_created_at,
             "updated_at": format_timestamp(updated_at),
+            **yaml_summary,
             "global_peak_dbm": None,
             "rows": [],
             "columns": [],
+            "orientation_images": {},
             "folders": [],
             "plots": [],
             "x_range": {"min": 0, "max": 0},
@@ -316,6 +653,12 @@ def load_measurement_dataset(logs_root: Path, measurement_id: str) -> dict[str, 
 
     rows = sorted({str(folder["polarisation"]) for folder in folders}, key=polarisation_sort_key)
     columns = sorted({str(folder["orientation"]) for folder in folders}, key=natural_sort_key)
+    orientation_images = build_orientation_image_map(
+        logs_root,
+        measurement_dir,
+        yaml_summary.get("orientation_photo_location"),
+        columns,
+    )
     folder_records = []
     plot_records = []
 
@@ -329,6 +672,8 @@ def load_measurement_dataset(logs_root: Path, measurement_id: str) -> dict[str, 
                 "power_level": folder["power_level"],
                 "frequency_hz": folder["frequency_hz"],
                 "peak_dbm": round(folder["peak_dbm"], 6),
+                "eirp_dbm": round(folder["eirp_dbm"], 6) if folder["eirp_dbm"] is not None else None,
+                "gain_dbd": round(folder["gain_dbd"], 6) if folder["gain_dbd"] is not None else None,
             }
         )
 
@@ -344,6 +689,8 @@ def load_measurement_dataset(logs_root: Path, measurement_id: str) -> dict[str, 
                     "power_level": folder["power_level"],
                     "frequency_hz": folder["frequency_hz"],
                     "peak_dbm": round(folder["peak_dbm"], 6),
+                    "eirp_dbm": round(folder["eirp_dbm"], 6) if folder["eirp_dbm"] is not None else None,
+                    "gain_dbd": round(folder["gain_dbd"], 6) if folder["gain_dbd"] is not None else None,
                     "peak_offset_db": round(folder["peak_dbm"] - global_peak_dbm, 6),
                     "points": [
                         {
@@ -369,11 +716,14 @@ def load_measurement_dataset(logs_root: Path, measurement_id: str) -> dict[str, 
     return {
         "measurement_id": measurement_id,
         "measurement_name": measurement_dir.name,
-        "yaml_relative_path": f"{measurement_dir.name}/1_meas_azimuth.yaml",
+        "yaml_relative_path": display_path(yaml_path, logs_root),
+        "yaml_created_at": yaml_created_at,
         "updated_at": format_timestamp(updated_at),
+        **yaml_summary,
         "global_peak_dbm": round(global_peak_dbm, 6),
         "rows": rows,
         "columns": columns,
+        "orientation_images": orientation_images,
         "folders": folder_records,
         "plots": plot_records,
         "x_range": {
@@ -442,7 +792,12 @@ class WOYMRequestHandler(SimpleHTTPRequestHandler):
 
     def handle_yaml_list(self) -> None:
         measurements = list_measurements(self.logs_root)
-        default_measurement_id = measurements[0]["measurement_id"] if measurements else None
+        measurement_ids = {measurement["measurement_id"] for measurement in measurements}
+        default_measurement_id = (
+            PREFERRED_DEFAULT_MEASUREMENT_ID
+            if PREFERRED_DEFAULT_MEASUREMENT_ID in measurement_ids
+            else measurements[0]["measurement_id"] if measurements else None
+        )
         self.send_json(
             {
                 "measurements": measurements,
