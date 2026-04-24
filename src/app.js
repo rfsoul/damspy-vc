@@ -1349,14 +1349,49 @@ function createPlotReadoutOverlay(width) {
   };
 }
 
+function estimatePolarGapThreshold(points, fallbackDegrees = 180) {
+  const sortedAngles = points
+    .map((point) => Number(point.angle_deg))
+    .filter((value) => Number.isFinite(value))
+    .sort((left, right) => left - right);
+
+  if (sortedAngles.length < 3) {
+    return fallbackDegrees;
+  }
+
+  const gaps = [];
+
+  for (let index = 1; index < sortedAngles.length; index += 1) {
+    const gap = sortedAngles[index] - sortedAngles[index - 1];
+
+    if (gap > 0) {
+      gaps.push(gap);
+    }
+  }
+
+  if (!gaps.length) {
+    return fallbackDegrees;
+  }
+
+  gaps.sort((left, right) => left - right);
+  const medianGap = gaps[Math.floor(gaps.length / 2)];
+
+  if (!Number.isFinite(medianGap) || medianGap <= 0) {
+    return fallbackDegrees;
+  }
+
+  return Math.min(fallbackDegrees, Math.max(medianGap * 1.5, medianGap + 0.5));
+}
+
 function buildPolarPathCommands(points, getPosition, wrapGapDegrees = 180) {
   const commands = [];
   let previousAngle = null;
+  const gapThreshold = estimatePolarGapThreshold(points, wrapGapDegrees);
 
   for (const point of points) {
     const angle = Number(point.angle_deg);
     const position = getPosition(point);
-    const startsNewSegment = previousAngle === null || (Number.isFinite(angle) && Number.isFinite(previousAngle) && Math.abs(angle - previousAngle) >= wrapGapDegrees);
+    const startsNewSegment = previousAngle === null || (Number.isFinite(angle) && Number.isFinite(previousAngle) && Math.abs(angle - previousAngle) > gapThreshold);
 
     commands.push((startsNewSegment ? "M" : "L") + position.x.toFixed(2) + " " + position.y.toFixed(2));
     previousAngle = angle;
