@@ -1056,6 +1056,7 @@ function buildDifferenceSeries(series) {
       continue;
     }
 
+    const maxDeltaDb = Math.max(...deltaPoints.map((point) => Number(point.delta_db)));
     const highLabel = highLevel.label || formatPowerLevel(highSeries.power_level) || "higher";
     const lowLabel = lowLevel.label || formatPowerLevel(lowSeries.power_level) || "lower";
 
@@ -1063,7 +1064,12 @@ function buildDifferenceSeries(series) {
       channel: highSeries.channel,
       color: highSeries.color,
       label: formatChannelLabel(highSeries.channel) + " Delta (" + highLabel + " - " + lowLabel + ")",
-      points: deltaPoints
+      max_delta_db: maxDeltaDb,
+      points: deltaPoints.map((point) => ({
+        ...point,
+        normalised_delta_db: Number(point.delta_db) - maxDeltaDb,
+        display_value: Number(point.delta_db) - maxDeltaDb
+      }))
     });
   }
 
@@ -1121,13 +1127,15 @@ function prepareSeriesForPlot(series, dataset, mode, showDifferenceOverlay = fal
       .sort((left, right) => left.angle_deg - right.angle_deg)
   }));
   const differenceSeries = mode === PLOT_DISPLAY_MODES.DB && showDifferenceOverlay ? buildDifferenceSeries(preparedSeries) : [];
-  const differenceValues = differenceSeries.flatMap((entry) => entry.points.map((point) => Number(point.delta_db))).filter((value) => Number.isFinite(value));
+  const differenceValues = differenceSeries
+    .flatMap((entry) => entry.points.map((point) => Number(point.normalised_delta_db)))
+    .filter((value) => Number.isFinite(value));
   const yMin = mode === PLOT_DISPLAY_MODES.E_OVER_EMAX
     ? 0
     : Math.min(Number(dataset.y_range.min), differenceValues.length ? Math.floor(Math.min(...differenceValues) / 5) * 5 : 0);
   const yMax = mode === PLOT_DISPLAY_MODES.E_OVER_EMAX
     ? 1
-    : Math.max(0, differenceValues.length ? Math.ceil(Math.max(...differenceValues) / 5) * 5 : 0);
+    : 0;
 
   return {
     plotPeakDbm,
@@ -1137,7 +1145,7 @@ function prepareSeriesForPlot(series, dataset, mode, showDifferenceOverlay = fal
     yLabel: mode === PLOT_DISPLAY_MODES.E_OVER_EMAX
       ? "E/Emax (per plot, dB guides)"
       : differenceSeries.length
-        ? "Relative / Delta (dB)"
+        ? "Relative / Delta To Delta Max (dB)"
         : "Relative To Global Peak (dB)",
     ringTicks: mode === PLOT_DISPLAY_MODES.E_OVER_EMAX ? buildEOverEmaxRingTicks() : buildDbRingTicks(yMin, yMax),
     series: preparedSeries,
@@ -1293,7 +1301,7 @@ function createPlotLegend(preparedPlot, mode) {
 
     const primary = document.createElement("div");
     primary.className = "legend-primary";
-    primary.textContent = entry.label;
+    primary.textContent = entry.label + " | max diff " + formatSignedDb(entry.max_delta_db);
 
     item.append(swatch, primary);
     legend.append(item);
@@ -1668,7 +1676,7 @@ function createPlotSvg(preparedPlot, row, column, mode) {
       rows.push({
         color: entry.color,
         dashed: true,
-        text: entry.label + ": " + formatSignedDb(point.delta_db)
+        text: entry.label + ": " + formatSignedDb(point.delta_db) + " | rel " + formatSignedDb(point.normalised_delta_db)
       });
     }
 
