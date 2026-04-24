@@ -175,6 +175,11 @@ function formatDbi(value) {
   return Number.isFinite(numericValue) ? numericValue.toFixed(1) + " dBi" : MISSING;
 }
 
+function formatDbdAsDbi(value) {
+  const numericValue = Number(value);
+  return Number.isFinite(numericValue) ? formatDbi(numericValue + 2.15) : MISSING;
+}
+
 function formatSignedDb(value) {
   const numericValue = Number(value);
   if (!Number.isFinite(numericValue)) {
@@ -1279,7 +1284,7 @@ function createPlotLegend(preparedPlot, mode) {
       parts.push("EIRP " + formatDbm(entry.eirp_dbm));
     }
     if (entry.gain_dbd !== null && entry.gain_dbd !== undefined) {
-      parts.push(formatDbd(entry.gain_dbd));
+      parts.push(formatDbdAsDbi(entry.gain_dbd));
     }
     primary.textContent = parts.join(" | ");
 
@@ -1342,6 +1347,22 @@ function createPlotReadoutOverlay(width) {
     foreignObject,
     minHeight: 56
   };
+}
+
+function buildPolarPathCommands(points, getPosition, wrapGapDegrees = 180) {
+  const commands = [];
+  let previousAngle = null;
+
+  for (const point of points) {
+    const angle = Number(point.angle_deg);
+    const position = getPosition(point);
+    const startsNewSegment = previousAngle === null || (Number.isFinite(angle) && Number.isFinite(previousAngle) && Math.abs(angle - previousAngle) >= wrapGapDegrees);
+
+    commands.push((startsNewSegment ? "M" : "L") + position.x.toFixed(2) + " " + position.y.toFixed(2));
+    previousAngle = angle;
+  }
+
+  return commands;
 }
 
 function findNearestNumber(sortedValues, target) {
@@ -1558,10 +1579,10 @@ function createPlotSvg(preparedPlot, row, column, mode) {
   svg.append(axisLabel);
 
   for (const entry of preparedPlot.series) {
-    const commands = entry.points.map((point, index) => {
-      const position = polarToCartesian(point.angle_deg, point.display_value);
-      return (index === 0 ? "M" : "L") + position.x.toFixed(2) + " " + position.y.toFixed(2);
-    });
+    const commands = buildPolarPathCommands(
+      entry.points,
+      (point) => polarToCartesian(point.angle_deg, point.display_value)
+    );
 
     svg.append(createSvgElement("path", {
       class: "series-line",
@@ -1575,10 +1596,10 @@ function createPlotSvg(preparedPlot, row, column, mode) {
   }
 
   for (const entry of preparedPlot.differenceSeries) {
-    const commands = entry.points.map((point, index) => {
-      const position = polarToCartesian(point.angle_deg, point.display_value);
-      return (index === 0 ? "M" : "L") + position.x.toFixed(2) + " " + position.y.toFixed(2);
-    });
+    const commands = buildPolarPathCommands(
+      entry.points,
+      (point) => polarToCartesian(point.angle_deg, point.display_value)
+    );
 
     svg.append(createSvgElement("path", {
       class: "series-line difference-line",
