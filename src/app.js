@@ -252,6 +252,57 @@ function formatSeriesLabel(entry) {
   return powerLevel ? formatChannelLabel(entry.channel) + " " + powerLevel : formatChannelLabel(entry.channel);
 }
 
+function inferSeriesLevel(entry) {
+  const candidates = [entry.power_level, entry.folder_name];
+
+  for (const candidate of candidates) {
+    if (candidate === null || candidate === undefined || candidate === "") {
+      continue;
+    }
+
+    const numericValue = Number(candidate);
+    if (Number.isFinite(numericValue)) {
+      return {
+        label: "Pwr " + numericValue,
+        rank: numericValue
+      };
+    }
+
+    const text = String(candidate).trim();
+    const lower = text.toLowerCase();
+
+    if (lower.includes("ctx high")) {
+      return { label: "CTX High", rank: 200 };
+    }
+
+    if (lower.includes("ctx low")) {
+      return { label: "CTX Low", rank: 100 };
+    }
+
+    if (lower.includes("high")) {
+      return { label: text, rank: 200 };
+    }
+
+    if (lower.includes("mid") || lower.includes("medium")) {
+      return { label: text, rank: 150 };
+    }
+
+    if (lower.includes("low")) {
+      return { label: text, rank: 100 };
+    }
+
+    return {
+      label: text,
+      rank: null
+    };
+  }
+
+  return {
+    label: "",
+    rank: null
+  };
+}
+
 function formatPolarisationLabel(value) {
   const text = value === null || value === undefined ? "" : String(value).trim();
 
@@ -313,6 +364,22 @@ function comparePowerLevels(leftValue, rightValue) {
   }
 
   return naturalSortValue(leftValue ?? "").localeCompare(naturalSortValue(rightValue ?? ""));
+}
+
+function compareSeriesLevels(leftEntry, rightEntry) {
+  const leftLevel = inferSeriesLevel(leftEntry);
+  const rightLevel = inferSeriesLevel(rightEntry);
+
+  if (leftLevel.rank !== null && rightLevel.rank !== null && leftLevel.rank !== rightLevel.rank) {
+    return leftLevel.rank - rightLevel.rank;
+  }
+
+  const powerOrder = comparePowerLevels(leftEntry.power_level, rightEntry.power_level);
+  if (powerOrder !== 0) {
+    return powerOrder;
+  }
+
+  return naturalSortValue(leftEntry.folder_name ?? "").localeCompare(naturalSortValue(rightEntry.folder_name ?? ""));
 }
 
 function formatYamlSummaryValue(value) {
@@ -856,7 +923,19 @@ function plotKey(polarisation, orientation) {
 
 function normaliseAngleKey(value) {
   const numericValue = Number(value);
-  return Number.isFinite(numericValue) ? numericValue.toFixed(6) : String(value);
+  const normalisedValue = Number.isFinite(numericValue) ? normalisePolarAngle(numericValue) : value;
+  return Number.isFinite(normalisedValue) ? normalisedValue.toFixed(6) : String(normalisedValue);
+}
+
+function normalisePolarAngle(value) {
+  const numericValue = Number(value);
+
+  if (!Number.isFinite(numericValue)) {
+    return Number.NaN;
+  }
+
+  const wrapped = ((numericValue % 360) + 360) % 360;
+  return wrapped === 360 ? 0 : wrapped;
 }
 
 function getPlotPeakDbm(series) {
@@ -946,11 +1025,13 @@ function buildDifferenceSeries(series) {
       continue;
     }
 
-    const sortedByPower = [...items].sort((left, right) => comparePowerLevels(left.power_level, right.power_level));
+    const sortedByPower = [...items].sort(compareSeriesLevels);
     const lowSeries = sortedByPower[0];
     const highSeries = sortedByPower[sortedByPower.length - 1];
+    const lowLevel = inferSeriesLevel(lowSeries);
+    const highLevel = inferSeriesLevel(highSeries);
 
-    if (comparePowerLevels(lowSeries.power_level, highSeries.power_level) === 0) {
+    if (compareSeriesLevels(lowSeries, highSeries) === 0) {
       continue;
     }
 
@@ -975,8 +1056,8 @@ function buildDifferenceSeries(series) {
       continue;
     }
 
-    const highLabel = formatPowerLevel(highSeries.power_level) || "higher";
-    const lowLabel = formatPowerLevel(lowSeries.power_level) || "lower";
+    const highLabel = highLevel.label || formatPowerLevel(highSeries.power_level) || "higher";
+    const lowLabel = lowLevel.label || formatPowerLevel(lowSeries.power_level) || "lower";
 
     differences.push({
       channel: highSeries.channel,
@@ -1030,7 +1111,7 @@ function prepareSeriesForPlot(series, dataset, mode, showDifferenceOverlay = fal
         const normalisedDb = Number(point.normalised_db);
         const relativeToPlotDb = rxPeakDbm - plotPeakDbm;
         return {
-          angle_deg: Number(point.angle_deg),
+          angle_deg: normalisePolarAngle(point.angle_deg),
           rx_peak_dbm: rxPeakDbm,
           normalised_db: normalisedDb,
           e_over_emax: dbToAmplitudeRatio(relativeToPlotDb),
@@ -1234,13 +1315,13 @@ function createSvgElement(name, attributes = {}) {
 }
 
 function createPlotReadoutOverlay(width) {
-  const overlayWidth = Math.min(220, width - 30);
+  const overlayWidth = Math.min(180, width - 30);
   const foreignObject = createSvgElement("foreignObject", {
     class: "plot-readout-overlay",
     x: width - overlayWidth - 14,
     y: 14,
     width: overlayWidth,
-    height: 84
+    height: 56
   });
 
   const container = document.createElement("div");
@@ -1250,7 +1331,7 @@ function createPlotReadoutOverlay(width) {
   return {
     container,
     foreignObject,
-    minHeight: 84
+    minHeight: 56
   };
 }
 
@@ -1318,7 +1399,7 @@ function updatePlotReadout(readout, angle, rows, pinned, mode) {
     readout.container.append(line);
   }
 
-  const height = Math.max(readout.minHeight, 50 + rows.length * 24);
+  const height = Math.max(readout.minHeight, 24 + rows.length * 12);
   readout.foreignObject.setAttribute("height", String(height));
 }
 
