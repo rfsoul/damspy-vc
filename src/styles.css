@@ -241,6 +241,12 @@ textarea {
   font-size: 0.92rem;
 }
 
+.button:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
+  transform: none;
+}
+
 .main-grid {
   display: grid;
   gap: 1.35rem;
@@ -515,32 +521,39 @@ textarea {
   font-size: 0.92rem;
 }
 
-.plot-readout {
-  min-height: 5.3rem;
-  padding: 0.75rem 0.85rem;
+.plot-readout-overlay {
+  pointer-events: none;
+}
+
+.plot-overlay-readout {
+  min-height: 100%;
+  padding: 0.7rem 0.8rem;
   border-radius: 0.95rem;
-  background: rgba(255, 255, 255, 0.03);
-  border: 1px solid var(--border);
+  background: rgba(4, 7, 12, 0.82);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  backdrop-filter: blur(12px);
   display: grid;
-  gap: 0.25rem;
+  gap: 0.3rem;
 }
 
 .plot-readout-title {
-  font-size: 0.95rem;
+  font-size: 0.98rem;
   font-weight: 800;
 }
 
 .plot-readout-hint {
   color: var(--muted);
-  font-size: 0.92rem;
+  font-size: 0.96rem;
+  line-height: 1.2;
 }
 
 .plot-readout-row {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 0.55rem;
   color: var(--muted-strong);
-  font-size: 0.92rem;
+  font-size: 0.96rem;
+  line-height: 1.2;
 }
 
 .swatch {
@@ -548,6 +561,7 @@ textarea {
   height: 0.75rem;
   border-radius: 999px;
   flex: 0 0 auto;
+  margin-top: 0.2rem;
 }
 
 .plot-svg {
@@ -581,6 +595,11 @@ textarea {
   stroke-linejoin: round;
 }
 
+.plot-svg .difference-line {
+  stroke-dasharray: 7 5;
+  stroke-width: 2;
+}
+
 .plot-svg .crosshair {
   stroke: rgba(255, 255, 255, 0.35);
   stroke-width: 1.2;
@@ -590,6 +609,10 @@ textarea {
 .plot-svg .hover-marker {
   stroke: rgba(4, 7, 12, 0.95);
   stroke-width: 1.5;
+}
+
+.plot-svg .difference-marker {
+  fill-opacity: 0.95;
 }
 
 .plot-legend {

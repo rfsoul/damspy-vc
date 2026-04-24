@@ -42,6 +42,7 @@ const analyserElements = {
   subtitle: document.getElementById("analyserSubtitle"),
   yamlPickerButton: document.getElementById("yamlPickerButton"),
   yamlRefreshButton: document.getElementById("yamlRefreshButton"),
+  differenceOverlayButton: document.getElementById("differenceOverlayButton"),
   yamlPickerPanel: document.getElementById("yamlPickerPanel"),
   yamlOptions: document.getElementById("yamlOptions"),
   selectedYamlPath: document.getElementById("selectedYamlPath"),
@@ -65,6 +66,7 @@ const analyserState = {
   defaultMeasurementId: "",
   selectedMeasurementId: "",
   dataset: null,
+  showDifferenceOverlay: false,
   pickerOpen: false,
   listRequestInFlight: false,
   dataRequestSerial: 0
@@ -164,6 +166,64 @@ function formatLocalDateTime(value) {
 
 function formatChannelLabel(channel) {
   return channel === MISSING || channel === null || channel === undefined ? "Ch ?" : "Ch " + channel;
+}
+
+function formatPowerLevel(value) {
+  if (value === MISSING || value === null || value === undefined || value === "") {
+    return "";
+  }
+
+  const numericValue = Number(value);
+  if (Number.isFinite(numericValue)) {
+    return "Pwr " + numericValue;
+  }
+
+  return String(value);
+}
+
+function formatSeriesLabel(entry) {
+  const powerLevel = formatPowerLevel(entry.power_level);
+  return powerLevel ? formatChannelLabel(entry.channel) + " " + powerLevel : formatChannelLabel(entry.channel);
+}
+
+function semanticPowerRank(value) {
+  const text = String(value ?? "").trim().toLowerCase();
+
+  if (!text) {
+    return null;
+  }
+
+  if (text.includes("high")) {
+    return 2;
+  }
+
+  if (text.includes("mid") || text.includes("medium")) {
+    return 1;
+  }
+
+  if (text.includes("low")) {
+    return 0;
+  }
+
+  return null;
+}
+
+function comparePowerLevels(leftValue, rightValue) {
+  const leftNumber = Number(leftValue);
+  const rightNumber = Number(rightValue);
+
+  if (Number.isFinite(leftNumber) && Number.isFinite(rightNumber)) {
+    return leftNumber - rightNumber;
+  }
+
+  const leftRank = semanticPowerRank(leftValue);
+  const rightRank = semanticPowerRank(rightValue);
+
+  if (leftRank !== null && rightRank !== null && leftRank !== rightRank) {
+    return leftRank - rightRank;
+  }
+
+  return naturalSortValue(leftValue ?? "").localeCompare(naturalSortValue(rightValue ?? ""));
 }
 
 function setBanner(element, kind, message) {
@@ -435,6 +495,7 @@ function renderAnalyserEmpty(message) {
   empty.className = "plot-grid-empty";
   empty.textContent = message;
   analyserElements.plotGridContainer.append(empty);
+  updateDifferenceOverlayButton();
 }
 
 function renderAnalyserData(data) {
@@ -446,6 +507,7 @@ function renderAnalyserData(data) {
   analyserElements.measurementUpdatedAt.textContent = "Updated " + formatLocalDateTime(data.updated_at);
 
   renderFolderList(data.folders);
+  updateDifferenceOverlayButton();
   renderPlotGrid(data);
 }
 
@@ -489,15 +551,145 @@ function sortSeries(series) {
     const rightNumber = Number(right.channel);
 
     if (Number.isFinite(leftNumber) && Number.isFinite(rightNumber)) {
-      return leftNumber - rightNumber;
+      if (leftNumber !== rightNumber) {
+        return leftNumber - rightNumber;
+      }
+
+      return comparePowerLevels(left.power_level, right.power_level);
     }
 
-    return naturalSortValue(left.channel).localeCompare(naturalSortValue(right.channel));
+    const channelOrder = naturalSortValue(left.channel ?? "").localeCompare(naturalSortValue(right.channel ?? ""));
+    if (channelOrder !== 0) {
+      return channelOrder;
+    }
+
+    return comparePowerLevels(left.power_level, right.power_level);
   });
 }
 
 function plotKey(polarisation, orientation) {
   return polarisation + "::" + orientation;
+}
+
+function normaliseAngleKey(value) {
+  const numericValue = Number(value);
+  return Number.isFinite(numericValue) ? numericValue.toFixed(6) : String(value);
+}
+
+function buildDifferenceSeries(series) {
+  const grouped = new Map();
+
+  for (const entry of sortSeries(series)) {
+    const key = String(entry.channel ?? "");
+    const items = grouped.get(key) || [];
+    items.push(entry);
+    grouped.set(key, items);
+  }
+
+  const differences = [];
+
+  for (const items of grouped.values()) {
+    if (items.length < 2) {
+      continue;
+    }
+
+    const sortedByPower = [...items].sort((left, right) => comparePowerLevels(left.power_level, right.power_level));
+    const lowSeries = sortedByPower[0];
+    const highSeries = sortedByPower[sortedByPower.length - 1];
+
+    if (comparePowerLevels(lowSeries.power_level, highSeries.power_level) === 0) {
+      continue;
+    }
+
+    const lowPointMap = new Map(
+      lowSeries.points.map((point) => [normaliseAngleKey(point.angle_deg), point])
+    );
+    const deltaPoints = [];
+
+    for (const point of highSeries.points) {
+      const lowPoint = lowPointMap.get(normaliseAngleKey(point.angle_deg));
+
+      if (!lowPoint) {
+        continue;
+      }
+
+      deltaPoints.push({
+        angle_deg: Number(point.angle_deg),
+        delta_db: Number(point.normalised_db) - Number(lowPoint.normalised_db)
+      });
+    }
+
+    if (!deltaPoints.length) {
+      continue;
+    }
+
+    const highLabel = formatPowerLevel(highSeries.power_level) || "higher";
+    const lowLabel = formatPowerLevel(lowSeries.power_level) || "lower";
+
+    differences.push({
+      channel: highSeries.channel,
+      color: highSeries.color,
+      label: formatChannelLabel(highSeries.channel) + " Delta (" + highLabel + " - " + lowLabel + ")",
+      points: deltaPoints
+    });
+  }
+
+  return differences;
+}
+
+function datasetHasDifferenceSeries(data) {
+  return Boolean(data && Array.isArray(data.plots) && data.plots.some((plot) => buildDifferenceSeries(plot.series).length));
+}
+
+function getPlotYRange(data, includeDifferences) {
+  const range = {
+    min: Number(data?.y_range?.min),
+    max: Number(data?.y_range?.max)
+  };
+
+  if (!includeDifferences) {
+    return range;
+  }
+
+  let minValue = range.min;
+  let maxValue = range.max;
+
+  for (const plot of data.plots || []) {
+    for (const difference of buildDifferenceSeries(plot.series)) {
+      for (const point of difference.points) {
+        const deltaValue = Number(point.delta_db);
+
+        if (!Number.isFinite(deltaValue)) {
+          continue;
+        }
+
+        minValue = Math.min(minValue, deltaValue);
+        maxValue = Math.max(maxValue, deltaValue);
+      }
+    }
+  }
+
+  return {
+    min: Math.min(range.min, Math.floor(minValue / 5) * 5),
+    max: Math.max(range.max, Math.ceil(maxValue / 5) * 5)
+  };
+}
+
+function updateDifferenceOverlayButton() {
+  const button = analyserElements.differenceOverlayButton;
+  const hasDifferences = datasetHasDifferenceSeries(analyserState.dataset);
+
+  if (!hasDifferences) {
+    analyserState.showDifferenceOverlay = false;
+  }
+
+  button.disabled = !hasDifferences;
+  button.classList.toggle("is-active", hasDifferences && analyserState.showDifferenceOverlay);
+  button.textContent = !hasDifferences
+    ? "Channel Delta Unavailable"
+    : analyserState.showDifferenceOverlay
+      ? "Hide Channel Delta"
+      : "Show Channel Delta";
 }
 
 function renderPlotGrid(data) {
@@ -512,6 +704,7 @@ function renderPlotGrid(data) {
   }
 
   const plotMap = new Map(data.plots.map((plot) => [plotKey(plot.polarisation, plot.orientation), plot]));
+  const yRange = getPlotYRange(data, analyserState.showDifferenceOverlay);
   const grid = document.createElement("div");
   grid.className = "plot-grid";
   grid.style.gridTemplateColumns = `8.5rem repeat(${data.columns.length}, minmax(18rem, 1fr))`;
@@ -536,14 +729,14 @@ function renderPlotGrid(data) {
 
     for (const column of data.columns) {
       const plot = plotMap.get(plotKey(row, column));
-      grid.append(createPlotCard(plot, row, column, data));
+      grid.append(createPlotCard(plot, row, column, data, { yRange }));
     }
   }
 
   analyserElements.plotGridContainer.append(grid);
 }
 
-function createPlotCard(plot, row, column, dataset) {
+function createPlotCard(plot, row, column, dataset, options = {}) {
   if (!plot || !plot.series.length) {
     const empty = document.createElement("div");
     empty.className = "plot-card";
@@ -568,29 +761,28 @@ function createPlotCard(plot, row, column, dataset) {
 
   const subtitle = document.createElement("p");
   subtitle.className = "plot-card-subtitle";
-  subtitle.textContent = plot.series.length + " overlaid channel(s)";
+  const baseTraceCount = plot.series.length;
+  subtitle.textContent = baseTraceCount + " trace(s)" + (analyserState.showDifferenceOverlay ? " with channel delta overlay" : "");
 
   titleGroup.append(title, subtitle);
   header.append(titleGroup);
-
-  const readout = document.createElement("div");
-  readout.className = "plot-readout";
 
   const series = sortSeries(plot.series).map((entry, index) => ({
     ...entry,
     color: CHANNEL_COLORS[index % CHANNEL_COLORS.length]
   }));
+  const differenceSeries = analyserState.showDifferenceOverlay ? buildDifferenceSeries(series) : [];
+  const svg = createPlotSvg(series, dataset, row, column, {
+    differenceSeries,
+    yRange: options.yRange || dataset.y_range
+  });
+  const legend = createPlotLegend(series, dataset.global_peak_dbm, differenceSeries);
 
-  updatePlotReadout(readout, null, [], false);
-
-  const svg = createPlotSvg(series, dataset, readout, row, column);
-  const legend = createPlotLegend(series, dataset.global_peak_dbm);
-
-  card.append(header, readout, svg, legend);
+  card.append(header, svg, legend);
   return card;
 }
 
-function createPlotLegend(series, globalPeakDbm) {
+function createPlotLegend(series, globalPeakDbm, differenceSeries = []) {
   const legend = document.createElement("div");
   legend.className = "plot-legend";
 
@@ -608,7 +800,26 @@ function createPlotLegend(series, globalPeakDbm) {
     swatch.style.background = entry.color;
 
     const text = document.createElement("span");
-    text.textContent = formatChannelLabel(entry.channel) + " peak " + formatDbm(entry.peak_dbm) + " (" + formatSignedDb(entry.peak_offset_db) + ")";
+    text.textContent = formatSeriesLabel(entry) + " peak " + formatDbm(entry.peak_dbm) + " (" + formatSignedDb(entry.peak_offset_db) + ")";
+
+    item.append(swatch, text);
+    legend.append(item);
+  }
+
+  for (const entry of differenceSeries) {
+    const item = document.createElement("div");
+    item.className = "legend-item";
+
+    const swatch = document.createElement("span");
+    swatch.className = "swatch";
+    swatch.style.width = "1rem";
+    swatch.style.height = "0";
+    swatch.style.borderRadius = "0";
+    swatch.style.background = "transparent";
+    swatch.style.borderTop = "2px dashed " + entry.color;
+
+    const text = document.createElement("span");
+    text.textContent = entry.label;
 
     item.append(swatch, text);
     legend.append(item);
@@ -627,6 +838,27 @@ function createSvgElement(name, attributes = {}) {
   }
 
   return element;
+}
+
+function createPlotReadoutOverlay(width, margin) {
+  const overlayWidth = Math.min(220, width - margin.left - margin.right - 12);
+  const foreignObject = createSvgElement("foreignObject", {
+    class: "plot-readout-overlay",
+    x: width - margin.right - overlayWidth - 6,
+    y: margin.top + 6,
+    width: overlayWidth,
+    height: 76
+  });
+
+  const container = document.createElement("div");
+  container.className = "plot-overlay-readout";
+  foreignObject.append(container);
+
+  return {
+    container,
+    foreignObject,
+    minHeight: 76
+  };
 }
 
 function buildTicks(minValue, maxValue, count) {
@@ -667,26 +899,27 @@ function findNearestNumber(sortedValues, target) {
   return nearest;
 }
 
-function updatePlotReadout(container, angle, rows, pinned) {
-  container.replaceChildren();
+function updatePlotReadout(readout, angle, rows, pinned) {
+  readout.container.replaceChildren();
 
   if (angle === null || !rows.length) {
     const title = document.createElement("div");
     title.className = "plot-readout-title";
-    title.textContent = "Cursor readout";
+    title.textContent = "Cursor Readout";
 
     const hint = document.createElement("div");
     hint.className = "plot-readout-hint";
     hint.textContent = "Hover to inspect values. Click to pin the current angle.";
 
-    container.append(title, hint);
+    readout.container.append(title, hint);
+    readout.foreignObject.setAttribute("height", String(readout.minHeight));
     return;
   }
 
   const title = document.createElement("div");
   title.className = "plot-readout-title";
   title.textContent = "Angle " + formatDegrees(angle) + (pinned ? " | pinned" : "");
-  container.append(title);
+  readout.container.append(title);
 
   for (const row of rows) {
     const line = document.createElement("div");
@@ -694,17 +927,29 @@ function updatePlotReadout(container, angle, rows, pinned) {
 
     const swatch = document.createElement("span");
     swatch.className = "swatch";
-    swatch.style.background = row.color;
+    if (row.dashed) {
+      swatch.style.width = "1rem";
+      swatch.style.height = "0";
+      swatch.style.borderRadius = "0";
+      swatch.style.background = "transparent";
+      swatch.style.borderTop = "2px dashed " + row.color;
+    } else {
+      swatch.style.background = row.color;
+    }
 
     const text = document.createElement("span");
-    text.textContent = formatChannelLabel(row.channel) + ": " + formatDb(row.normalised_db) + " | " + formatDbm(row.rx_peak_dbm);
+    text.textContent = row.text;
 
     line.append(swatch, text);
-    container.append(line);
+    readout.container.append(line);
   }
+
+  const height = Math.max(readout.minHeight, 44 + rows.length * 24);
+  readout.foreignObject.setAttribute("height", String(height));
 }
 
-function createPlotSvg(series, dataset, readout, row, column) {
+function createPlotSvg(series, dataset, row, column, options = {}) {
+  const differenceSeries = options.differenceSeries || [];
   const width = 360;
   const height = 250;
   const margin = { top: 18, right: 14, bottom: 38, left: 54 };
@@ -712,8 +957,8 @@ function createPlotSvg(series, dataset, readout, row, column) {
   const chartHeight = height - margin.top - margin.bottom;
   const xMin = Number(dataset.x_range.min);
   const xMax = Number(dataset.x_range.max);
-  const yMin = Number(dataset.y_range.min);
-  const yMax = Number(dataset.y_range.max);
+  const yMin = Number(options.yRange?.min ?? dataset.y_range.min);
+  const yMax = Number(options.yRange?.max ?? dataset.y_range.max);
 
   const svg = createSvgElement("svg", {
     class: "plot-svg",
@@ -724,7 +969,9 @@ function createPlotSvg(series, dataset, readout, row, column) {
 
   const xScale = (value) => margin.left + ((value - xMin) / (xMax - xMin || 1)) * chartWidth;
   const yScale = (value) => margin.top + ((yMax - value) / (yMax - yMin || 1)) * chartHeight;
-  const sampleAngles = Array.from(new Set(series.flatMap((entry) => entry.points.map((point) => Number(point.angle_deg)))))
+  const sampleAngles = Array.from(new Set(
+    [...series, ...differenceSeries].flatMap((entry) => entry.points.map((point) => Number(point.angle_deg)))
+  ))
     .filter((value) => Number.isFinite(value))
     .sort((left, right) => left - right);
 
@@ -803,7 +1050,7 @@ function createPlotSvg(series, dataset, readout, row, column) {
     transform: `rotate(-90 14 ${margin.top + chartHeight / 2})`,
     "text-anchor": "middle"
   });
-  yAxisLabel.textContent = "Relative To Global Peak (dB)";
+  yAxisLabel.textContent = differenceSeries.length ? "Relative / Delta (dB)" : "Relative To Global Peak (dB)";
   svg.append(yAxisLabel);
 
   for (const entry of series) {
@@ -828,6 +1075,27 @@ function createPlotSvg(series, dataset, readout, row, column) {
     }));
   }
 
+  for (const entry of differenceSeries) {
+    const points = [...entry.points]
+      .map((point) => ({
+        angle_deg: Number(point.angle_deg),
+        delta_db: Number(point.delta_db)
+      }))
+      .sort((left, right) => left.angle_deg - right.angle_deg);
+
+    const commands = points.map((point, index) => {
+      const x = xScale(point.angle_deg);
+      const y = yScale(point.delta_db);
+      return (index === 0 ? "M" : "L") + x.toFixed(2) + " " + y.toFixed(2);
+    });
+
+    svg.append(createSvgElement("path", {
+      class: "series-line difference-line",
+      d: commands.join(" "),
+      stroke: entry.color
+    }));
+  }
+
   const crosshair = createSvgElement("line", {
     class: "crosshair",
     x1: margin.left,
@@ -840,6 +1108,10 @@ function createPlotSvg(series, dataset, readout, row, column) {
 
   const markerLayer = createSvgElement("g");
   svg.append(markerLayer);
+
+  const readout = createPlotReadoutOverlay(width, margin);
+  updatePlotReadout(readout, null, [], false);
+  svg.append(readout.foreignObject);
 
   const overlay = createSvgElement("rect", {
     x: margin.left,
@@ -890,10 +1162,32 @@ function createPlotSvg(series, dataset, readout, row, column) {
 
       markerLayer.append(marker);
       rows.push({
-        channel: entry.channel,
         color: entry.color,
-        normalised_db: Number(point.normalised_db),
-        rx_peak_dbm: Number(point.rx_peak_dbm)
+        dashed: false,
+        text: formatSeriesLabel(entry) + ": " + formatDb(point.normalised_db) + " | " + formatDbm(point.rx_peak_dbm)
+      });
+    }
+
+    for (const entry of differenceSeries) {
+      const point = entry.points.find((candidate) => Number(candidate.angle_deg) === nearestAngle);
+
+      if (!point) {
+        continue;
+      }
+
+      const marker = createSvgElement("circle", {
+        class: "hover-marker difference-marker",
+        cx: xScale(nearestAngle),
+        cy: yScale(Number(point.delta_db)),
+        r: 4,
+        fill: entry.color
+      });
+
+      markerLayer.append(marker);
+      rows.push({
+        color: entry.color,
+        dashed: true,
+        text: entry.label + ": " + formatSignedDb(point.delta_db)
       });
     }
 
@@ -946,6 +1240,16 @@ function bindAnalyserControls() {
   analyserElements.yamlRefreshButton.addEventListener("click", async () => {
     await loadMeasurementList();
     renderYamlPicker();
+  });
+
+  analyserElements.differenceOverlayButton.addEventListener("click", () => {
+    if (!analyserState.dataset || !datasetHasDifferenceSeries(analyserState.dataset)) {
+      return;
+    }
+
+    analyserState.showDifferenceOverlay = !analyserState.showDifferenceOverlay;
+    updateDifferenceOverlayButton();
+    renderPlotGrid(analyserState.dataset);
   });
 }
 
