@@ -186,37 +186,6 @@ def coerce_float(value: Any) -> float | None:
     return numeric_value if math.isfinite(numeric_value) else None
 
 
-def canonical_measurement_value(value: Any) -> str:
-    if value is None:
-        return ""
-
-    if isinstance(value, bool):
-        return "true" if value else "false"
-
-    numeric_value = coerce_float(value)
-    if numeric_value is not None:
-        if numeric_value.is_integer():
-            return str(int(numeric_value))
-        return format(numeric_value, ".15g")
-
-    return str(value).strip().lower()
-
-
-def coerce_measurement_sequence(value: Any) -> list[str]:
-    if value is None:
-        return []
-
-    items = value if isinstance(value, list) else [value]
-    values: list[str] = []
-
-    for item in items:
-        canonical_value = canonical_measurement_value(item)
-        if canonical_value:
-            values.append(canonical_value)
-
-    return values
-
-
 def read_yaml_summary_fields(path: Path) -> dict[str, Any]:
     field_values: dict[str, Any] = {
         "dut_product": None,
@@ -309,116 +278,6 @@ def read_yaml_summary_fields(path: Path) -> dict[str, Any]:
     return field_values
 
 
-def read_yaml_completion_dimensions(path: Path) -> dict[str, list[str]]:
-    field_values: dict[str, Any] = {
-        "orientations": [],
-        "polarisations": [],
-        "channels": [],
-        "power_levels": [],
-    }
-    top_level_fields = {
-        "orientations": "orientations",
-        "polarisation": "polarisations",
-    }
-    section_fields = {
-        "sig_gen_1": {
-            "channels": "channels",
-            "power_levels": "power_levels",
-        },
-    }
-    active_section: str | None = None
-
-    with open(extended_path(path), "r", encoding="utf-8") as handle:
-        for raw_line in handle:
-            line = raw_line.rstrip("\r\n")
-            content = strip_yaml_inline_comment(line)
-            stripped = content.strip()
-
-            if not stripped:
-                continue
-
-            indent = len(content) - len(content.lstrip(" "))
-
-            if indent == 0:
-                active_section = None
-
-                if stripped.endswith(":"):
-                    section_name = stripped[:-1].strip()
-                    active_section = section_name if section_name in section_fields else None
-                    continue
-
-                if ":" not in stripped:
-                    continue
-
-                key, raw_value = stripped.split(":", 1)
-                mapped_key = top_level_fields.get(key.strip())
-                if mapped_key is None:
-                    continue
-
-                field_values[mapped_key] = parse_yaml_scalar(raw_value)
-                continue
-
-            if active_section is None or ":" not in stripped:
-                continue
-
-            key, raw_value = stripped.split(":", 1)
-            mapped_key = section_fields.get(active_section, {}).get(key.strip())
-            if mapped_key is None:
-                continue
-
-            field_values[mapped_key] = parse_yaml_scalar(raw_value)
-
-    return {
-        "orientations": coerce_measurement_sequence(field_values.get("orientations")),
-        "polarisations": coerce_measurement_sequence(field_values.get("polarisations")),
-        "channels": coerce_measurement_sequence(field_values.get("channels")),
-        "power_levels": coerce_measurement_sequence(field_values.get("power_levels")),
-    }
-
-
-def read_name_completion_dimensions(measurement_name: str) -> dict[str, list[str]]:
-    patterns = {
-        "orientations": r"-Ori_(.*?)-Ch_",
-        "channels": r"-Ch_(.*?)-Pwr_",
-        "power_levels": r"-Pwr_(.*?)-Pol_",
-        "polarisations": r"-Pol_(.*?)-Step_",
-    }
-    dimensions: dict[str, list[str]] = {}
-
-    for key, pattern in patterns.items():
-        match = re.search(pattern, measurement_name)
-        if match is None:
-            dimensions[key] = []
-            continue
-
-        dimensions[key] = coerce_measurement_sequence(match.group(1).split("_"))
-
-    return dimensions
-
-
-def expected_measurement_keys(yaml_path: Path, measurement_name: str) -> set[tuple[str, str, str, str]]:
-    yaml_dimensions = read_yaml_completion_dimensions(yaml_path)
-    name_dimensions = read_name_completion_dimensions(measurement_name)
-    orientations = yaml_dimensions["orientations"] or name_dimensions["orientations"]
-    polarisations = yaml_dimensions["polarisations"] or name_dimensions["polarisations"]
-    channels = yaml_dimensions["channels"] or name_dimensions["channels"]
-    power_levels = yaml_dimensions["power_levels"] or name_dimensions["power_levels"]
-
-    if not orientations or not polarisations or not channels:
-        return set()
-
-    if not power_levels:
-        power_levels = [""]
-
-    return {
-        (orientation, polarisation, channel, power_level)
-        for orientation in orientations
-        for polarisation in polarisations
-        for channel in channels
-        for power_level in power_levels
-    }
-
-
 def find_first_file_by_suffix(path: Path, suffixes: set[str]) -> Path | None:
     for entry in iter_directory(path):
         if entry.is_file() and Path(entry.name).suffix.lower() in suffixes:
@@ -431,13 +290,30 @@ def find_first_png(path: Path) -> Path | None:
     return find_first_file_by_suffix(path, {".png"})
 
 
-def expected_measurement_count(yaml_path: Path, measurement_name: str) -> int:
-    return len(expected_measurement_keys(yaml_path, measurement_name))
+def expected_measurement_count(yaml_path: Path) -> int:
+    expected_count = 1
+
+    with open(extended_path(yaml_path), "r", encoding="utf-8") as handle:
+        for raw_line in handle:
+            line = raw_line.rstrip("\r\n")
+            content = strip_yaml_inline_comment(line)
+            stripped = content.strip()
+
+            if not stripped or stripped.startswith("#") or ":" not in stripped:
+                continue
+
+            _, raw_value = stripped.split(":", 1)
+            parsed_value = parse_yaml_scalar(raw_value)
+
+            if isinstance(parsed_value, list):
+                expected_count *= len(parsed_value)
+
+    return expected_count
 
 
 def build_measurement_completion(measurement_dir: Path, yaml_path: Path) -> dict[str, Any]:
     results_dir = measurement_dir / "1_meas_azimuth"
-    expected_count = expected_measurement_count(yaml_path, measurement_dir.name)
+    expected_count = expected_measurement_count(yaml_path)
 
     if not path_is_dir(results_dir):
         return {
