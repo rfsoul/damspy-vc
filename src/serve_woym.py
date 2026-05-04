@@ -797,6 +797,15 @@ def unique_values_in_order(values: list[str]) -> list[str]:
     return ordered
 
 
+def normalise_dimension_values(value: Any) -> list[str]:
+    if value is None:
+        return []
+
+    items = value if isinstance(value, list) else [value]
+    normalised = [str(item).strip() for item in items if item is not None and str(item).strip()]
+    return unique_values_in_order(normalised)
+
+
 def parse_subfolder_dimensions(subfolder_name: str) -> dict[str, str]:
     values = {"ori": "", "pol": "", "ch": "", "pwr": "", "ctx": ""}
     patterns = {
@@ -837,11 +846,11 @@ def infer_subfolder_template_segments(subfolder_names: list[str]) -> list[str]:
 def build_expected_dimension_combinations(yaml_path: Path, subfolder_names: list[str]) -> list[dict[str, str]]:
     yaml_dimensions = read_yaml_named_dimensions(yaml_path)
     observed_dimensions = collect_observed_dimension_values(subfolder_names)
-    orientations = [str(value) for value in (yaml_dimensions.get("orientations") or [])] or observed_dimensions["ori"]
-    polarisations = [str(value) for value in (yaml_dimensions.get("polarisation") or [])] or observed_dimensions["pol"]
-    channels = [str(value) for value in (yaml_dimensions.get("channels") or [])] or observed_dimensions["ch"]
-    power_levels = [str(value) for value in (yaml_dimensions.get("power_levels") or [])] or observed_dimensions["pwr"] or [""]
-    ctx_values = [str(value) for value in (yaml_dimensions.get("CTX") or [])] or observed_dimensions["ctx"] or [""]
+    orientations = normalise_dimension_values(yaml_dimensions.get("orientations")) or observed_dimensions["ori"]
+    polarisations = normalise_dimension_values(yaml_dimensions.get("polarisation")) or observed_dimensions["pol"]
+    channels = normalise_dimension_values(yaml_dimensions.get("channels")) or observed_dimensions["ch"]
+    power_levels = normalise_dimension_values(yaml_dimensions.get("power_levels")) or observed_dimensions["pwr"] or [""]
+    ctx_values = normalise_dimension_values(yaml_dimensions.get("CTX")) or observed_dimensions["ctx"] or [""]
 
     if not orientations or not polarisations or not channels:
         return []
@@ -1285,7 +1294,7 @@ class WOYMRequestHandler(SimpleHTTPRequestHandler):
     def handle_write_summary_csv(self) -> None:
         try:
             output_path = write_measurement_summary_csv(self.logs_root)
-        except OSError as exc:
+        except Exception as exc:
             self.send_json({"error": str(exc)}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
             return
 
