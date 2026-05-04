@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import itertools
 import json
 import math
 import os
@@ -691,30 +692,222 @@ SUMMARY_FLAG_COLUMNS = [
 ]
 
 
-def build_summary_flag_row(measurement_name: str, subfolder_name: str) -> list[str]:
+def build_summary_flag_row(measurement_name: str, subfolder_name: str, marker: str = "1") -> list[str]:
     subfolder_key = subfolder_name.lower()
     measurement_key = measurement_name.lower()
     flags = {
-        "ori1": "1" if "ori-ori1" in subfolder_key else "",
-        "ori2": "1" if "ori-ori2" in subfolder_key else "",
-        "ori3": "1" if "ori-ori3" in subfolder_key else "",
-        "ori4": "1" if "ori-ori4" in subfolder_key else "",
-        "Pol_V": "1" if "pol-v" in subfolder_key else "",
-        "Pol_H": "1" if "pol-h" in subfolder_key else "",
-        "Ch_0": "1" if "ch-0" in subfolder_key else "",
-        "Ch_20": "1" if "ch-20" in subfolder_key else "",
-        "Ch_40": "1" if "ch-40" in subfolder_key else "",
-        "Ch_60": "1" if "ch-60" in subfolder_key else "",
-        "Ch_80": "1" if "ch-80" in subfolder_key else "",
-        "Pwr_0": "1" if "pwr-0" in subfolder_key else "",
-        "Pwr_10": "1" if "pwr-10" in subfolder_key else "",
-        "ctx0": "1" if re.search(r"ctx[-_]?0(?:[^0-9]|$)", subfolder_key) else "",
-        "ctx1": "1" if re.search(r"ctx[-_]?1(?:[^0-9]|$)", subfolder_key) else "",
-        "step_1deg": "1" if "step_1deg" in measurement_key else "",
-        "step_2deg": "1" if "step_2deg" in measurement_key else "",
+        "ori1": marker if "ori-ori1" in subfolder_key else "",
+        "ori2": marker if "ori-ori2" in subfolder_key else "",
+        "ori3": marker if "ori-ori3" in subfolder_key else "",
+        "ori4": marker if "ori-ori4" in subfolder_key else "",
+        "Pol_V": marker if "pol-v" in subfolder_key else "",
+        "Pol_H": marker if "pol-h" in subfolder_key else "",
+        "Ch_0": marker if "ch-0" in subfolder_key else "",
+        "Ch_20": marker if "ch-20" in subfolder_key else "",
+        "Ch_40": marker if "ch-40" in subfolder_key else "",
+        "Ch_60": marker if "ch-60" in subfolder_key else "",
+        "Ch_80": marker if "ch-80" in subfolder_key else "",
+        "Pwr_0": marker if "pwr-0" in subfolder_key else "",
+        "Pwr_10": marker if "pwr-10" in subfolder_key else "",
+        "ctx0": marker if re.search(r"ctx[-_]?0(?:[^0-9]|$)", subfolder_key) else "",
+        "ctx1": marker if re.search(r"ctx[-_]?1(?:[^0-9]|$)", subfolder_key) else "",
+        "step_1deg": marker if "step_1deg" in measurement_key else "",
+        "step_2deg": marker if "step_2deg" in measurement_key else "",
     }
 
     return [flags[column] for column in SUMMARY_FLAG_COLUMNS]
+
+
+def read_yaml_named_dimensions(path: Path) -> dict[str, Any]:
+    field_values: dict[str, Any] = {
+        "orientations": [],
+        "polarisation": [],
+        "channels": [],
+        "power_levels": [],
+        "CTX": [],
+        "step_deg": None,
+    }
+    top_level_fields = {
+        "orientations": "orientations",
+        "polarisation": "polarisation",
+        "step_deg": "step_deg",
+    }
+    section_fields = {
+        "sig_gen_1": {
+            "channels": "channels",
+            "power_levels": "power_levels",
+            "CTX": "CTX",
+        },
+    }
+    active_section: str | None = None
+
+    with open(extended_path(path), "r", encoding="utf-8") as handle:
+        for raw_line in handle:
+            line = raw_line.rstrip("\r\n")
+            content = strip_yaml_inline_comment(line)
+            stripped = content.strip()
+
+            if not stripped:
+                continue
+
+            indent = len(content) - len(content.lstrip(" "))
+
+            if indent == 0:
+                active_section = None
+
+                if stripped.endswith(":"):
+                    section_name = stripped[:-1].strip()
+                    active_section = section_name if section_name in section_fields else None
+                    continue
+
+                if ":" not in stripped:
+                    continue
+
+                key, raw_value = stripped.split(":", 1)
+                mapped_key = top_level_fields.get(key.strip())
+                if mapped_key is None:
+                    continue
+
+                field_values[mapped_key] = parse_yaml_scalar(raw_value)
+                continue
+
+            if active_section is None or ":" not in stripped:
+                continue
+
+            key, raw_value = stripped.split(":", 1)
+            mapped_key = section_fields.get(active_section, {}).get(key.strip())
+            if mapped_key is None:
+                continue
+
+            field_values[mapped_key] = parse_yaml_scalar(raw_value)
+
+    return field_values
+
+
+def unique_values_in_order(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    ordered: list[str] = []
+
+    for value in values:
+        if value in seen:
+            continue
+        seen.add(value)
+        ordered.append(value)
+
+    return ordered
+
+
+def parse_subfolder_dimensions(subfolder_name: str) -> dict[str, str]:
+    values = {"ori": "", "pol": "", "ch": "", "pwr": "", "ctx": ""}
+    patterns = {
+        "ori": r"(?:^|_)ori-([^_]+)",
+        "pol": r"(?:^|_)pol-([^_]+)",
+        "ch": r"(?:^|_)ch-([^_]+)",
+        "pwr": r"(?:^|_)pwr-([^_]+)",
+        "ctx": r"(?:^|_)ctx-([^_]+)",
+    }
+
+    for key, pattern in patterns.items():
+        match = re.search(pattern, subfolder_name, flags=re.IGNORECASE)
+        if match is not None:
+            values[key] = match.group(1)
+
+    return values
+
+
+def collect_observed_dimension_values(subfolder_names: list[str]) -> dict[str, list[str]]:
+    collected = {"ori": [], "pol": [], "ch": [], "pwr": [], "ctx": []}
+
+    for subfolder_name in subfolder_names:
+        parsed = parse_subfolder_dimensions(subfolder_name)
+        for key, value in parsed.items():
+            if value:
+                collected[key].append(value)
+
+    return {key: unique_values_in_order(values) for key, values in collected.items()}
+
+
+def infer_subfolder_template_segments(subfolder_names: list[str]) -> list[str]:
+    if not subfolder_names:
+        return ["ori-", "pol-", "ant-na", "pwr-", "ch-"]
+
+    return subfolder_names[0].split("_")
+
+
+def build_expected_dimension_combinations(yaml_path: Path, subfolder_names: list[str]) -> list[dict[str, str]]:
+    yaml_dimensions = read_yaml_named_dimensions(yaml_path)
+    observed_dimensions = collect_observed_dimension_values(subfolder_names)
+    orientations = [str(value) for value in (yaml_dimensions.get("orientations") or [])] or observed_dimensions["ori"]
+    polarisations = [str(value) for value in (yaml_dimensions.get("polarisation") or [])] or observed_dimensions["pol"]
+    channels = [str(value) for value in (yaml_dimensions.get("channels") or [])] or observed_dimensions["ch"]
+    power_levels = [str(value) for value in (yaml_dimensions.get("power_levels") or [])] or observed_dimensions["pwr"] or [""]
+    ctx_values = [str(value) for value in (yaml_dimensions.get("CTX") or [])] or observed_dimensions["ctx"] or [""]
+
+    if not orientations or not polarisations or not channels:
+        return []
+
+    combinations = []
+
+    for ori, pol, ch, pwr, ctx in itertools.product(orientations, polarisations, channels, power_levels, ctx_values):
+        combinations.append({"ori": ori, "pol": pol, "ch": ch, "pwr": pwr, "ctx": ctx})
+
+    return combinations
+
+
+def build_guessed_subfolder_name(template_segments: list[str], dimensions: dict[str, str]) -> str:
+    replacements = {
+        "ori-": "ori-" + dimensions["ori"],
+        "pol-": "pol-" + dimensions["pol"],
+        "pwr-": "pwr-" + dimensions["pwr"],
+        "ch-": "ch-" + dimensions["ch"],
+        "ctx-": "ctx-" + dimensions["ctx"],
+    }
+    rendered_segments: list[str] = []
+    used_prefixes: set[str] = set()
+
+    for segment in template_segments:
+        replaced = segment
+
+        for prefix, replacement in replacements.items():
+            if segment.lower().startswith(prefix):
+                replaced = replacement if replacement != prefix else ""
+                used_prefixes.add(prefix)
+                break
+
+        if replaced:
+            rendered_segments.append(replaced)
+
+    for prefix in ["ori-", "pol-", "pwr-", "ch-", "ctx-"]:
+        replacement = replacements[prefix]
+        if prefix not in used_prefixes and replacement != prefix:
+            rendered_segments.append(replacement)
+
+    return "_".join(rendered_segments)
+
+
+def build_expected_subfolder_rows(measurement_name: str, yaml_path: Path, subfolder_names: list[str]) -> list[tuple[str, str]]:
+    template_segments = infer_subfolder_template_segments(subfolder_names)
+    present_by_key: dict[tuple[str, str, str, str, str], str] = {}
+
+    for subfolder_name in subfolder_names:
+        parsed = parse_subfolder_dimensions(subfolder_name)
+        present_by_key[(parsed["ori"], parsed["pol"], parsed["ch"], parsed["pwr"], parsed["ctx"])] = subfolder_name
+
+    expected_combinations = build_expected_dimension_combinations(yaml_path, subfolder_names)
+    if not expected_combinations:
+        return [(subfolder_name, "present") for subfolder_name in subfolder_names]
+
+    rows: list[tuple[str, str]] = []
+
+    for combination in expected_combinations:
+        key = (combination["ori"], combination["pol"], combination["ch"], combination["pwr"], combination["ctx"])
+        present_name = present_by_key.get(key)
+        if present_name is not None:
+            rows.append((present_name, "present"))
+        else:
+            rows.append((build_guessed_subfolder_name(template_segments, combination), "missing"))
+
+    return rows
 
 
 def write_measurement_summary_csv(logs_root: Path) -> Path:
@@ -723,35 +916,43 @@ def write_measurement_summary_csv(logs_root: Path) -> Path:
 
     with open(extended_path(output_path), "w", encoding="utf-8", newline="") as handle:
         writer = csv.writer(handle)
-        writer.writerow(["folder_number", "total_required_subfolders", "test_folder_name", "subfolder_name", *SUMMARY_FLAG_COLUMNS])
+        writer.writerow(["folder_number", "total_required_subfolders", "folder_status", "test_folder_name", "subfolder_name", *SUMMARY_FLAG_COLUMNS])
 
         for measurement in measurements:
             row_number = 1
             measurement_dir = logs_root / measurement["measurement_id"]
+            yaml_path = measurement_dir / "1_meas_azimuth.yaml"
             results_dir = measurement_dir / "1_meas_azimuth"
             subfolder_names = list_measurement_subfolders(results_dir)
+            subfolder_rows = build_expected_subfolder_rows(measurement.get("measurement_name", ""), yaml_path, subfolder_names)
 
-            if not subfolder_names:
+            if not subfolder_rows:
                 writer.writerow(
                     [
                         row_number,
                         measurement.get("expected_subfolders", 0),
+                        "missing",
                         measurement.get("measurement_name", ""),
                         "",
-                        *build_summary_flag_row(measurement.get("measurement_name", ""), ""),
+                        *build_summary_flag_row(measurement.get("measurement_name", ""), "", "X"),
                     ]
                 )
                 row_number += 1
                 continue
 
-            for subfolder_name in subfolder_names:
+            for subfolder_name, folder_status in subfolder_rows:
                 writer.writerow(
                     [
                         row_number,
                         measurement.get("expected_subfolders", 0),
+                        folder_status,
                         measurement.get("measurement_name", ""),
                         subfolder_name,
-                        *build_summary_flag_row(measurement.get("measurement_name", ""), subfolder_name),
+                        *build_summary_flag_row(
+                            measurement.get("measurement_name", ""),
+                            subfolder_name,
+                            "1" if folder_status == "present" else "X",
+                        ),
                     ]
                 )
                 row_number += 1
