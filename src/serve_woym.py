@@ -1003,6 +1003,10 @@ class WOYMRequestHandler(SimpleHTTPRequestHandler):
             self.handle_measurement_data()
             return
 
+        if clean_path == "/api/results-analyser/write-summary-csv":
+            self.handle_write_summary_csv()
+            return
+
         super().do_GET()
 
     def translate_path(self, path: str) -> str:
@@ -1076,6 +1080,20 @@ class WOYMRequestHandler(SimpleHTTPRequestHandler):
             return
 
         self.send_json(dataset)
+
+    def handle_write_summary_csv(self) -> None:
+        try:
+            output_path = write_measurement_summary_csv(self.logs_root)
+        except OSError as exc:
+            self.send_json({"error": str(exc)}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+            return
+
+        self.send_json(
+            {
+                "output_path": str(output_path),
+                "relative_path": display_path(output_path, self.logs_root),
+            }
+        )
 
 
 def format_url(host: str, port: int, page_path: str) -> str:

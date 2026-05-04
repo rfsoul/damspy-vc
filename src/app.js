@@ -57,6 +57,7 @@ const analyserElements = {
   measurementDetailsPanel: document.getElementById("measurementDetailsPanel"),
   testFolderPanel: document.getElementById("testFolderPanel"),
   yamlPickerButton: document.getElementById("yamlPickerButton"),
+  summaryCsvButton: document.getElementById("summaryCsvButton"),
   yamlRefreshButton: document.getElementById("yamlRefreshButton"),
   yamlPickerPanel: document.getElementById("yamlPickerPanel"),
   yamlOptions: document.getElementById("yamlOptions"),
@@ -97,6 +98,7 @@ const analyserState = {
   showDifferenceOverlay: false,
   pickerOpen: false,
   listRequestInFlight: false,
+  summaryCsvRequestInFlight: false,
   dataRequestSerial: 0,
   dataRequestInFlight: false,
   liveRefreshEnabled: false
@@ -673,6 +675,29 @@ async function fetchJson(url, options = {}) {
   }
 
   return response.json();
+}
+
+async function writeSummaryCsv() {
+  if (analyserState.summaryCsvRequestInFlight || !analyserElements.summaryCsvButton) {
+    return;
+  }
+
+  analyserState.summaryCsvRequestInFlight = true;
+  analyserElements.summaryCsvButton.disabled = true;
+  analyserElements.summaryCsvButton.textContent = "Generating CSV...";
+
+  try {
+    const data = await fetchJson("/api/results-analyser/write-summary-csv");
+    const relativePath = data && data.relative_path ? String(data.relative_path) : "measurement_summary.csv";
+    setBanner(analyserElements.banner, "success", "Summary CSV generated: " + relativePath);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unknown error";
+    setBanner(analyserElements.banner, "error", "Unable to generate summary CSV: " + message);
+  } finally {
+    analyserState.summaryCsvRequestInFlight = false;
+    analyserElements.summaryCsvButton.disabled = false;
+    analyserElements.summaryCsvButton.textContent = "Generate Summary CSV";
+  }
 }
 
 async function loadMeasurementList(options = {}) {
@@ -1850,6 +1875,12 @@ function bindAnalyserControls() {
     await loadMeasurementList();
     renderYamlPicker();
   });
+
+  if (analyserElements.summaryCsvButton) {
+    analyserElements.summaryCsvButton.addEventListener("click", async () => {
+      await writeSummaryCsv();
+    });
+  }
 
   if (analyserElements.livePlotRefreshButton) {
     analyserElements.livePlotRefreshButton.addEventListener("click", async () => {
