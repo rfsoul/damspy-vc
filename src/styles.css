@@ -579,11 +579,26 @@ textarea {
   width: 100%;
   text-align: left;
   color: inherit;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 0.9rem;
 }
 
 .yaml-option.is-selected {
   border-color: var(--border-strong);
   background: var(--selected-bg);
+}
+
+.yaml-option-statuses {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(2.3rem, auto));
+  gap: 0.45rem;
+  align-items: center;
+}
+
+.yaml-option-copy {
+  min-width: 0;
 }
 
 .yaml-option-title {
@@ -597,6 +612,40 @@ textarea {
   margin-top: 0.3rem;
   color: var(--muted);
   font-size: 0.92rem;
+}
+
+.status-badge {
+  display: grid;
+  justify-items: center;
+  gap: 0.3rem;
+}
+
+.status-badge-label {
+  color: var(--accent);
+  font-size: 0.62rem;
+  font-weight: 900;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.status-led {
+  width: 0.95rem;
+  height: 0.95rem;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  box-shadow: 0 0 0 0.18rem rgba(255, 255, 255, 0.05);
+}
+
+.status-green {
+  background: #22c55e;
+}
+
+.status-orange {
+  background: #f59e0b;
+}
+
+.status-red {
+  background: #ef4444;
 }
 
 .folder-list {

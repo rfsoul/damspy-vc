@@ -395,6 +395,36 @@ function formatYamlSummaryValue(value) {
   return String(value);
 }
 
+function formatMeasurementStatusLabel(status) {
+  if (status === "green") {
+    return "Green";
+  }
+
+  if (status === "orange") {
+    return "Orange";
+  }
+
+  return "Red";
+}
+
+function buildMeasurementStatusSummary(measurement) {
+  const expected = Number(measurement && measurement.expected_subfolders);
+  const actual = Number(measurement && measurement.actual_subfolders);
+  const csvCount = Number(measurement && measurement.subfolders_with_csv);
+  const pngCount = Number(measurement && measurement.subfolders_with_png);
+  const quantityLabel = formatMeasurementStatusLabel(measurement && measurement.quantity_status);
+  const completenessLabel = formatMeasurementStatusLabel(measurement && measurement.completeness_status);
+  const updatedAt = "Updated " + formatLocalDateTime(measurement && measurement.updated_at);
+
+  if (Number.isFinite(expected) && Number.isFinite(actual)) {
+    return "Qty " + quantityLabel + " | " + String(actual) + " / " + String(expected)
+      + " folders | Data " + completenessLabel + " | CSV " + String(csvCount) + " | PNG " + String(pngCount)
+      + " | " + updatedAt;
+  }
+
+  return "Qty " + quantityLabel + " | Data " + completenessLabel + " | " + updatedAt;
+}
+
 function buildAnalyserTitle(data) {
   const product = data && data.dut_product !== null && data.dut_product !== undefined
     ? String(data.dut_product).trim()
@@ -774,11 +804,26 @@ function renderYamlPicker() {
     button.className = "yaml-option";
     button.classList.toggle("is-selected", measurement.measurement_id === analyserState.selectedMeasurementId);
 
+    const statuses = document.createElement("div");
+    statuses.className = "yaml-option-statuses";
+
+    const quantityStatus = createMeasurementStatusBadge("QTY", measurement.quantity_status || "red");
+    const completenessStatus = createMeasurementStatusBadge("DATA", measurement.completeness_status || "red");
+
+    const copy = document.createElement("div");
+    copy.className = "yaml-option-copy";
+
+    const title = document.createElement("span");
+    title.className = "yaml-option-title";
+    title.textContent = measurement.yaml_relative_path || measurement.measurement_id;
+
     const meta = document.createElement("span");
     meta.className = "yaml-option-meta";
-    meta.textContent = measurement.yaml_relative_path + " | Updated " + formatLocalDateTime(measurement.updated_at);
+    meta.textContent = buildMeasurementStatusSummary(measurement);
 
-    button.append(meta);
+    copy.append(title, meta);
+    statuses.append(quantityStatus, completenessStatus);
+    button.append(statuses, copy);
     button.addEventListener("click", async () => {
       analyserState.pickerOpen = false;
       renderYamlPicker();
@@ -787,6 +832,22 @@ function renderYamlPicker() {
 
     analyserElements.yamlOptions.append(button);
   }
+}
+
+function createMeasurementStatusBadge(labelText, status) {
+  const badge = document.createElement("div");
+  badge.className = "status-badge";
+
+  const label = document.createElement("span");
+  label.className = "status-badge-label";
+  label.textContent = labelText;
+
+  const led = document.createElement("span");
+  led.className = "status-led status-" + status;
+  led.setAttribute("aria-hidden", "true");
+
+  badge.append(label, led);
+  return badge;
 }
 
 function renderAnalyserEmpty(message) {

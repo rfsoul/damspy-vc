@@ -105,14 +105,59 @@ def strip_yaml_inline_comment(value: str) -> str:
     return value.rstrip()
 
 
+def split_yaml_flow_items(value: str) -> list[str]:
+    items: list[str] = []
+    current: list[str] = []
+    in_single_quote = False
+    in_double_quote = False
+
+    for char in value:
+        if char == "'" and not in_double_quote:
+            in_single_quote = not in_single_quote
+            current.append(char)
+            continue
+
+        if char == '"' and not in_single_quote:
+            in_double_quote = not in_double_quote
+            current.append(char)
+            continue
+
+        if char == "," and not in_single_quote and not in_double_quote:
+            item = "".join(current).strip()
+            if item:
+                items.append(item)
+            current = []
+            continue
+
+        current.append(char)
+
+    item = "".join(current).strip()
+    if item:
+        items.append(item)
+
+    return items
+
+
 def parse_yaml_scalar(raw_value: str) -> Any:
     value = strip_yaml_inline_comment(raw_value).strip()
 
     if not value:
         return None
 
+    if len(value) >= 2 and value[0] == "[" and value[-1] == "]":
+        inner = value[1:-1].strip()
+        if not inner:
+            return []
+        return [parse_yaml_scalar(item) for item in split_yaml_flow_items(inner)]
+
     if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
         return value[1:-1]
+
+    lowered = value.lower()
+    if lowered == "true":
+        return True
+    if lowered == "false":
+        return False
 
     if re.fullmatch(r"[-+]?\d+", value):
         try:
@@ -139,6 +184,37 @@ def coerce_float(value: Any) -> float | None:
         return None
 
     return numeric_value if math.isfinite(numeric_value) else None
+
+
+def canonical_measurement_value(value: Any) -> str:
+    if value is None:
+        return ""
+
+    if isinstance(value, bool):
+        return "true" if value else "false"
+
+    numeric_value = coerce_float(value)
+    if numeric_value is not None:
+        if numeric_value.is_integer():
+            return str(int(numeric_value))
+        return format(numeric_value, ".15g")
+
+    return str(value).strip().lower()
+
+
+def coerce_measurement_sequence(value: Any) -> list[str]:
+    if value is None:
+        return []
+
+    items = value if isinstance(value, list) else [value]
+    values: list[str] = []
+
+    for item in items:
+        canonical_value = canonical_measurement_value(item)
+        if canonical_value:
+            values.append(canonical_value)
+
+    return values
 
 
 def read_yaml_summary_fields(path: Path) -> dict[str, Any]:
@@ -231,6 +307,178 @@ def read_yaml_summary_fields(path: Path) -> dict[str, Any]:
     field_values["rx_dist_m"] = coerce_float(field_values["rx_dist_m"])
 
     return field_values
+
+
+def read_yaml_completion_dimensions(path: Path) -> dict[str, list[str]]:
+    field_values: dict[str, Any] = {
+        "orientations": [],
+        "polarisations": [],
+        "channels": [],
+        "power_levels": [],
+    }
+    top_level_fields = {
+        "orientations": "orientations",
+        "polarisation": "polarisations",
+    }
+    section_fields = {
+        "sig_gen_1": {
+            "channels": "channels",
+            "power_levels": "power_levels",
+        },
+    }
+    active_section: str | None = None
+
+    with open(extended_path(path), "r", encoding="utf-8") as handle:
+        for raw_line in handle:
+            line = raw_line.rstrip("\r\n")
+            content = strip_yaml_inline_comment(line)
+            stripped = content.strip()
+
+            if not stripped:
+                continue
+
+            indent = len(content) - len(content.lstrip(" "))
+
+            if indent == 0:
+                active_section = None
+
+                if stripped.endswith(":"):
+                    section_name = stripped[:-1].strip()
+                    active_section = section_name if section_name in section_fields else None
+                    continue
+
+                if ":" not in stripped:
+                    continue
+
+                key, raw_value = stripped.split(":", 1)
+                mapped_key = top_level_fields.get(key.strip())
+                if mapped_key is None:
+                    continue
+
+                field_values[mapped_key] = parse_yaml_scalar(raw_value)
+                continue
+
+            if active_section is None or ":" not in stripped:
+                continue
+
+            key, raw_value = stripped.split(":", 1)
+            mapped_key = section_fields.get(active_section, {}).get(key.strip())
+            if mapped_key is None:
+                continue
+
+            field_values[mapped_key] = parse_yaml_scalar(raw_value)
+
+    return {
+        "orientations": coerce_measurement_sequence(field_values.get("orientations")),
+        "polarisations": coerce_measurement_sequence(field_values.get("polarisations")),
+        "channels": coerce_measurement_sequence(field_values.get("channels")),
+        "power_levels": coerce_measurement_sequence(field_values.get("power_levels")),
+    }
+
+
+def read_name_completion_dimensions(measurement_name: str) -> dict[str, list[str]]:
+    patterns = {
+        "orientations": r"-Ori_(.*?)-Ch_",
+        "channels": r"-Ch_(.*?)-Pwr_",
+        "power_levels": r"-Pwr_(.*?)-Pol_",
+        "polarisations": r"-Pol_(.*?)-Step_",
+    }
+    dimensions: dict[str, list[str]] = {}
+
+    for key, pattern in patterns.items():
+        match = re.search(pattern, measurement_name)
+        if match is None:
+            dimensions[key] = []
+            continue
+
+        dimensions[key] = coerce_measurement_sequence(match.group(1).split("_"))
+
+    return dimensions
+
+
+def expected_measurement_keys(yaml_path: Path, measurement_name: str) -> set[tuple[str, str, str, str]]:
+    yaml_dimensions = read_yaml_completion_dimensions(yaml_path)
+    name_dimensions = read_name_completion_dimensions(measurement_name)
+    orientations = yaml_dimensions["orientations"] or name_dimensions["orientations"]
+    polarisations = yaml_dimensions["polarisations"] or name_dimensions["polarisations"]
+    channels = yaml_dimensions["channels"] or name_dimensions["channels"]
+    power_levels = yaml_dimensions["power_levels"] or name_dimensions["power_levels"]
+
+    if not orientations or not polarisations or not channels:
+        return set()
+
+    if not power_levels:
+        power_levels = [""]
+
+    return {
+        (orientation, polarisation, channel, power_level)
+        for orientation in orientations
+        for polarisation in polarisations
+        for channel in channels
+        for power_level in power_levels
+    }
+
+
+def find_first_file_by_suffix(path: Path, suffixes: set[str]) -> Path | None:
+    for entry in iter_directory(path):
+        if entry.is_file() and Path(entry.name).suffix.lower() in suffixes:
+            return path / entry.name
+
+    return None
+
+
+def find_first_png(path: Path) -> Path | None:
+    return find_first_file_by_suffix(path, {".png"})
+
+
+def expected_measurement_count(yaml_path: Path, measurement_name: str) -> int:
+    return len(expected_measurement_keys(yaml_path, measurement_name))
+
+
+def build_measurement_completion(measurement_dir: Path, yaml_path: Path) -> dict[str, Any]:
+    results_dir = measurement_dir / "1_meas_azimuth"
+    expected_count = expected_measurement_count(yaml_path, measurement_dir.name)
+
+    if not path_is_dir(results_dir):
+        return {
+            "quantity_status": "red",
+            "completeness_status": "red",
+            "expected_count": expected_count,
+            "actual_count": 0,
+            "csv_count": 0,
+            "png_count": 0,
+        }
+
+    subfolders = [results_dir / entry.name for entry in iter_directory(results_dir) if entry.is_dir()]
+    actual_count = len(subfolders)
+    csv_count = 0
+    png_count = 0
+
+    for folder_path in subfolders:
+        if find_first_csv(folder_path) is not None:
+            csv_count += 1
+
+        if find_first_png(folder_path) is not None:
+            png_count += 1
+
+    if expected_count > 0 and actual_count == expected_count:
+        quantity_status = "green"
+    else:
+        quantity_status = "red"
+
+    if actual_count > 0 and csv_count == actual_count:
+        completeness_status = "green" if png_count == actual_count else "orange"
+    else:
+        completeness_status = "red"
+
+    return {
+        "quantity_status": quantity_status,
+        "completeness_status": completeness_status,
+        "expected_count": expected_count,
+        "actual_count": actual_count,
+        "csv_count": csv_count,
+        "png_count": png_count,
+    }
 
 
 def free_space_path_loss_db(frequency_hz: Any, distance_m: Any) -> float | None:
@@ -462,12 +710,19 @@ def measurement_manifest(logs_root: Path, measurement_dir: Path) -> dict[str, An
         os.stat(extended_path(yaml_path)).st_mtime,
     )
     measurement_timestamp = measurement_name_timestamp(measurement_id)
+    completion = build_measurement_completion(measurement_dir, yaml_path)
 
     return {
         "measurement_id": measurement_id,
         "measurement_name": measurement_name,
         "yaml_relative_path": display_path(yaml_path, logs_root),
         "updated_at": format_timestamp(updated_at),
+        "quantity_status": completion["quantity_status"],
+        "completeness_status": completion["completeness_status"],
+        "expected_subfolders": completion["expected_count"],
+        "actual_subfolders": completion["actual_count"],
+        "subfolders_with_csv": completion["csv_count"],
+        "subfolders_with_png": completion["png_count"],
         "_updated_at": updated_at,
         "_sort_at": measurement_timestamp if measurement_timestamp is not None else updated_at,
     }
