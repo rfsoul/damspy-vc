@@ -40,6 +40,11 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Do not try to open the browser automatically.",
     )
+    parser.add_argument(
+        "--write-summary-csv",
+        action="store_true",
+        help="Write a measurement summary CSV into the DAMspy logs root and exit.",
+    )
     return parser.parse_args()
 
 
@@ -656,6 +661,104 @@ def find_first_csv(path: Path) -> Path | None:
     return None
 
 
+def list_measurement_subfolders(results_dir: Path) -> list[str]:
+    if not path_is_dir(results_dir):
+        return []
+
+    names = [entry.name for entry in iter_directory(results_dir) if entry.is_dir()]
+    names.sort(key=natural_sort_key)
+    return names
+
+
+SUMMARY_FLAG_COLUMNS = [
+    "ori1",
+    "ori2",
+    "ori3",
+    "ori4",
+    "Pol_V",
+    "Pol_H",
+    "Ch_0",
+    "Ch_20",
+    "Ch_40",
+    "Ch_60",
+    "Ch_80",
+    "Pwr_0",
+    "Pwr_10",
+    "ctx0",
+    "ctx1",
+    "step_1deg",
+    "step_2deg",
+]
+
+
+def build_summary_flag_row(measurement_name: str, subfolder_name: str) -> list[str]:
+    subfolder_key = subfolder_name.lower()
+    measurement_key = measurement_name.lower()
+    flags = {
+        "ori1": "1" if "ori-ori1" in subfolder_key else "",
+        "ori2": "1" if "ori-ori2" in subfolder_key else "",
+        "ori3": "1" if "ori-ori3" in subfolder_key else "",
+        "ori4": "1" if "ori-ori4" in subfolder_key else "",
+        "Pol_V": "1" if "pol-v" in subfolder_key else "",
+        "Pol_H": "1" if "pol-h" in subfolder_key else "",
+        "Ch_0": "1" if "ch-0" in subfolder_key else "",
+        "Ch_20": "1" if "ch-20" in subfolder_key else "",
+        "Ch_40": "1" if "ch-40" in subfolder_key else "",
+        "Ch_60": "1" if "ch-60" in subfolder_key else "",
+        "Ch_80": "1" if "ch-80" in subfolder_key else "",
+        "Pwr_0": "1" if "pwr-0" in subfolder_key else "",
+        "Pwr_10": "1" if "pwr-10" in subfolder_key else "",
+        "ctx0": "1" if re.search(r"ctx[-_]?0(?:[^0-9]|$)", subfolder_key) else "",
+        "ctx1": "1" if re.search(r"ctx[-_]?1(?:[^0-9]|$)", subfolder_key) else "",
+        "step_1deg": "1" if "step_1deg" in measurement_key else "",
+        "step_2deg": "1" if "step_2deg" in measurement_key else "",
+    }
+
+    return [flags[column] for column in SUMMARY_FLAG_COLUMNS]
+
+
+def write_measurement_summary_csv(logs_root: Path) -> Path:
+    output_path = logs_root / "measurement_summary.csv"
+    measurements = list_measurements(logs_root)
+    row_number = 1
+
+    with open(extended_path(output_path), "w", encoding="utf-8", newline="") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(["folder_number", "total_required_subfolders", "test_folder_name", "subfolder_name", *SUMMARY_FLAG_COLUMNS])
+
+        for measurement in measurements:
+            measurement_dir = logs_root / measurement["measurement_id"]
+            results_dir = measurement_dir / "1_meas_azimuth"
+            subfolder_names = list_measurement_subfolders(results_dir)
+
+            if not subfolder_names:
+                writer.writerow(
+                    [
+                        row_number,
+                        measurement.get("expected_subfolders", 0),
+                        measurement.get("measurement_name", ""),
+                        "",
+                        *build_summary_flag_row(measurement.get("measurement_name", ""), ""),
+                    ]
+                )
+                row_number += 1
+                continue
+
+            for subfolder_name in subfolder_names:
+                writer.writerow(
+                    [
+                        row_number,
+                        measurement.get("expected_subfolders", 0),
+                        measurement.get("measurement_name", ""),
+                        subfolder_name,
+                        *build_summary_flag_row(measurement.get("measurement_name", ""), subfolder_name),
+                    ]
+                )
+                row_number += 1
+
+    return output_path
+
+
 def load_measurement_dataset(logs_root: Path, measurement_id: str) -> dict[str, Any]:
     measurement_dir, yaml_path, results_dir = resolve_measurement(logs_root, measurement_id)
     if not path_is_file(yaml_path):
@@ -1014,6 +1117,11 @@ def main() -> int:
     if not index_path.exists():
         print(f"Error: monitor page not found at {index_path}", file=sys.stderr)
         return 1
+
+    if args.write_summary_csv:
+        output_path = write_measurement_summary_csv(logs_root)
+        print(f"Wrote summary CSV: {output_path}")
+        return 0
 
     handler = lambda *handler_args, **handler_kwargs: WOYMRequestHandler(
         *handler_args,
