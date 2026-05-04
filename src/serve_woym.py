@@ -353,14 +353,12 @@ def build_measurement_completion(measurement_dir: Path, yaml_path: Path) -> dict
     else:
         quantity_status = "orange"
 
-    if actual_count <= 0:
+    if actual_count <= 0 or csv_count <= 0:
         completeness_status = "red"
-    elif missing_csv:
-        completeness_status = "red"
-    elif missing_png:
-        completeness_status = "orange"
-    else:
+    elif csv_count == actual_count and png_count == actual_count:
         completeness_status = "green"
+    else:
+        completeness_status = "orange"
 
     return {
         "quantity_status": quantity_status,
