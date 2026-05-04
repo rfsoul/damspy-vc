@@ -453,23 +453,36 @@ def build_measurement_completion(measurement_dir: Path, yaml_path: Path) -> dict
     actual_count = len(subfolders)
     csv_count = 0
     png_count = 0
+    missing_csv = False
+    missing_png = False
 
     for folder_path in subfolders:
-        if find_first_csv(folder_path) is not None:
-            csv_count += 1
+        has_csv = find_first_csv(folder_path) is not None
+        has_png = find_first_png(folder_path) is not None
 
-        if find_first_png(folder_path) is not None:
+        if has_csv:
+            csv_count += 1
+        else:
+            missing_csv = True
+
+        if has_png:
             png_count += 1
+        else:
+            missing_png = True
 
     if expected_count > 0 and actual_count == expected_count:
         quantity_status = "green"
     else:
         quantity_status = "red"
 
-    if actual_count > 0 and csv_count == actual_count:
-        completeness_status = "green" if png_count == actual_count else "orange"
-    else:
+    if actual_count <= 0:
         completeness_status = "red"
+    elif missing_csv:
+        completeness_status = "red"
+    elif missing_png:
+        completeness_status = "orange"
+    else:
+        completeness_status = "green"
 
     return {
         "quantity_status": quantity_status,
