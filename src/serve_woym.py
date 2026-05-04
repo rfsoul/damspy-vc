@@ -720,13 +720,13 @@ def build_summary_flag_row(measurement_name: str, subfolder_name: str) -> list[s
 def write_measurement_summary_csv(logs_root: Path) -> Path:
     output_path = logs_root / "measurement_summary.csv"
     measurements = list_measurements(logs_root)
-    row_number = 1
 
     with open(extended_path(output_path), "w", encoding="utf-8", newline="") as handle:
         writer = csv.writer(handle)
         writer.writerow(["folder_number", "total_required_subfolders", "test_folder_name", "subfolder_name", *SUMMARY_FLAG_COLUMNS])
 
         for measurement in measurements:
+            row_number = 1
             measurement_dir = logs_root / measurement["measurement_id"]
             results_dir = measurement_dir / "1_meas_azimuth"
             subfolder_names = list_measurement_subfolders(results_dir)
