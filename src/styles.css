@@ -988,7 +988,7 @@ textarea {
 
 .plot-orientation-photo {
   position: absolute;
-  top: -1.55rem;
+  top: 1.35rem;
   left: calc(-4.8rem - 0.45rem);
   width: 11.55rem;
   max-width: min(52%, 11.55rem);
