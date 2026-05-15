@@ -62,6 +62,7 @@ const analyserElements = {
   measurementDetailsPanel: document.getElementById("measurementDetailsPanel"),
   testFolderPanel: document.getElementById("testFolderPanel"),
   yamlPickerButton: document.getElementById("yamlPickerButton"),
+  docxSummaryButton: document.getElementById("docxSummaryButton"),
   summaryCsvButton: document.getElementById("summaryCsvButton"),
   yamlRefreshButton: document.getElementById("yamlRefreshButton"),
   yamlPickerPanel: document.getElementById("yamlPickerPanel"),
@@ -107,6 +108,7 @@ const analyserState = {
   showDifferenceOverlay: false,
   pickerOpen: false,
   listRequestInFlight: false,
+  docxSummaryRequestInFlight: false,
   summaryCsvRequestInFlight: false,
   dataRequestSerial: 0,
   dataRequestInFlight: false,
@@ -709,6 +711,42 @@ async function writeSummaryCsv() {
   }
 }
 
+async function writeDocxSummary() {
+  if (analyserState.docxSummaryRequestInFlight || !analyserElements.docxSummaryButton) {
+    return;
+  }
+
+  if (!analyserState.selectedMeasurementId) {
+    setBanner(analyserElements.banner, "warning", "Select a measurement before creating a DOCX summary.");
+    return;
+  }
+
+  analyserState.docxSummaryRequestInFlight = true;
+  analyserElements.docxSummaryButton.disabled = true;
+  analyserElements.docxSummaryButton.textContent = "Creating DOCX...";
+
+  try {
+    const data = await fetchJson("/api/results-analyser/write-docx-summary?measurement_id=" + encodeURIComponent(analyserState.selectedMeasurementId));
+    const relativePath = data && data.relative_path ? String(data.relative_path) : "analyser_summary.docx";
+    setBanner(analyserElements.banner, "success", "DOCX summary generated: " + relativePath);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unknown error";
+    setBanner(analyserElements.banner, "error", "Unable to create DOCX summary: " + message);
+  } finally {
+    analyserState.docxSummaryRequestInFlight = false;
+    analyserElements.docxSummaryButton.disabled = false;
+    analyserElements.docxSummaryButton.textContent = "Create DOCX Summary";
+  }
+}
+
+function updateDocxSummaryButton() {
+  if (!analyserElements.docxSummaryButton) {
+    return;
+  }
+
+  analyserElements.docxSummaryButton.disabled = analyserState.docxSummaryRequestInFlight || !analyserState.selectedMeasurementId;
+}
+
 async function loadMeasurementList(options = {}) {
   if (analyserState.listRequestInFlight) {
     return;
@@ -727,6 +765,7 @@ async function loadMeasurementList(options = {}) {
     }
 
     renderYamlPicker();
+    updateDocxSummaryButton();
 
     if (options.autoLoad && analyserState.selectedMeasurementId) {
       await loadMeasurementDataset(analyserState.selectedMeasurementId);
@@ -774,6 +813,7 @@ async function loadMeasurementDataset(measurementId, options = {}) {
     analyserState.dataset = data;
     clearBanner(analyserElements.banner);
     renderAnalyserData(data);
+    updateDocxSummaryButton();
   } catch (error) {
     if (requestId !== analyserState.dataRequestSerial) {
       return;
@@ -900,6 +940,7 @@ function renderAnalyserEmpty(message) {
   analyserElements.measurementUpdatedAt.textContent = MISSING;
   analyserElements.testFolderList.replaceChildren();
   analyserElements.plotGridContainer.replaceChildren();
+  updateDocxSummaryButton();
   updatePlotModeUi();
   updateDifferenceOverlayButton();
 
@@ -1918,6 +1959,12 @@ function bindAnalyserControls() {
     });
   }
 
+  if (analyserElements.docxSummaryButton) {
+    analyserElements.docxSummaryButton.addEventListener("click", async () => {
+      await writeDocxSummary();
+    });
+  }
+
   if (analyserElements.livePlotRefreshButton) {
     analyserElements.livePlotRefreshButton.addEventListener("click", async () => {
       analyserState.liveRefreshEnabled = !analyserState.liveRefreshEnabled;
@@ -2024,6 +2071,7 @@ applyTheme(readStoredTheme());
 updatePlotControlsUi();
 updatePlotModeUi();
 updateLivePlotRefreshButton();
+updateDocxSummaryButton();
 renderRoute();
 refreshMeasurementData();
 window.setInterval(refreshMeasurementData, REFRESH_MS);

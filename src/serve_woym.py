@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import html
 import itertools
 import json
 import math
@@ -13,6 +14,7 @@ import posixpath
 import re
 import sys
 import webbrowser
+import zipfile
 from datetime import datetime, timezone
 from http import HTTPStatus
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
@@ -26,6 +28,7 @@ MEASUREMENT_SCOPE_BEST = "best"
 MEASUREMENT_SCOPE_LOGS = "logs"
 MEASUREMENT_SCOPE_ALL = "all"
 BEST_FOLDER_NAME = "_best"
+ANALYSER_TESTER_NAME = "Alistair Morgan"
 PREFERRED_DEFAULT_MEASUREMENT_ID = (
     BEST_FOLDER_NAME + "/"
     "Antenna_Pattern_Measurement-2026-04-10_11-22-16-"
@@ -987,6 +990,318 @@ def write_measurement_summary_csv(logs_root: Path) -> Path:
     return output_path
 
 
+def xml_text(value: Any) -> str:
+    return html.escape("" if value is None else str(value), quote=False)
+
+
+def report_value(value: Any, suffix: str = "") -> str:
+    if value is None or value == "":
+        return "-"
+
+    if isinstance(value, float):
+        text = f"{value:.3f}".rstrip("0").rstrip(".")
+    else:
+        text = str(value)
+
+    return text + suffix
+
+
+def report_dbm(value: Any) -> str:
+    numeric_value = coerce_float(value)
+    return "-" if numeric_value is None else f"{numeric_value:.1f} dBm"
+
+
+def report_db(value: Any) -> str:
+    numeric_value = coerce_float(value)
+    return "-" if numeric_value is None else f"{numeric_value:.1f} dB"
+
+
+def report_hz(value: Any) -> str:
+    numeric_value = coerce_float(value)
+    if numeric_value is None:
+        return "-"
+    if abs(numeric_value) >= 1e9:
+        return f"{numeric_value / 1e9:.3f}".rstrip("0").rstrip(".") + " GHz"
+    if abs(numeric_value) >= 1e6:
+        return f"{numeric_value / 1e6:.3f}".rstrip("0").rstrip(".") + " MHz"
+    if abs(numeric_value) >= 1e3:
+        return f"{numeric_value / 1e3:.3f}".rstrip("0").rstrip(".") + " kHz"
+    return f"{numeric_value:.0f} Hz"
+
+
+def docx_para(text: Any = "", style: str | None = None, bold: bool = False) -> str:
+    properties = []
+    if style:
+        properties.append(f'<w:pStyle w:val="{style}"/>')
+    run_properties = "<w:rPr><w:b/></w:rPr>" if bold else ""
+    paragraph_properties = f"<w:pPr>{''.join(properties)}</w:pPr>" if properties else ""
+    return f"<w:p>{paragraph_properties}<w:r>{run_properties}<w:t xml:space=\"preserve\">{xml_text(text)}</w:t></w:r></w:p>"
+
+
+def docx_cell(text: Any, width: int, fill: str | None = None, bold: bool = False) -> str:
+    shading = f'<w:shd w:fill="{fill}"/>' if fill else ""
+    run_properties = "<w:rPr><w:b/></w:rPr>" if bold else ""
+    return (
+        "<w:tc>"
+        f"<w:tcPr><w:tcW w:w=\"{width}\" w:type=\"dxa\"/>{shading}</w:tcPr>"
+        f"<w:p><w:r>{run_properties}<w:t xml:space=\"preserve\">{xml_text(text)}</w:t></w:r></w:p>"
+        "</w:tc>"
+    )
+
+
+def docx_table(rows: list[list[Any]], widths: list[int], header: bool = True) -> str:
+    table_width = sum(widths)
+    grid = "".join(f'<w:gridCol w:w="{width}"/>' for width in widths)
+    rendered_rows = []
+
+    for row_index, row in enumerate(rows):
+        fill = "EAF3FA" if header and row_index == 0 else None
+        bold = header and row_index == 0
+        cells = [docx_cell(row[column_index] if column_index < len(row) else "", widths[column_index], fill, bold) for column_index in range(len(widths))]
+        rendered_rows.append(f"<w:tr>{''.join(cells)}</w:tr>")
+
+    return (
+        "<w:tbl>"
+        "<w:tblPr>"
+        f"<w:tblW w:w=\"{table_width}\" w:type=\"dxa\"/>"
+        '<w:tblBorders><w:top w:val="single" w:sz="4" w:color="D7E2EA"/>'
+        '<w:left w:val="single" w:sz="4" w:color="D7E2EA"/>'
+        '<w:bottom w:val="single" w:sz="4" w:color="D7E2EA"/>'
+        '<w:right w:val="single" w:sz="4" w:color="D7E2EA"/>'
+        '<w:insideH w:val="single" w:sz="4" w:color="D7E2EA"/>'
+        '<w:insideV w:val="single" w:sz="4" w:color="D7E2EA"/></w:tblBorders>'
+        '<w:tblCellMar><w:top w:w="90" w:type="dxa"/><w:left w:w="120" w:type="dxa"/>'
+        '<w:bottom w:w="90" w:type="dxa"/><w:right w:w="120" w:type="dxa"/></w:tblCellMar>'
+        "</w:tblPr>"
+        f"<w:tblGrid>{grid}</w:tblGrid>"
+        f"{''.join(rendered_rows)}"
+        "</w:tbl>"
+    )
+
+
+def png_dimensions(path: Path) -> tuple[int, int] | None:
+    try:
+        with open(extended_path(path), "rb") as handle:
+            header = handle.read(24)
+    except OSError:
+        return None
+
+    if len(header) < 24 or header[:8] != b"\x89PNG\r\n\x1a\n":
+        return None
+
+    width = int.from_bytes(header[16:20], "big")
+    height = int.from_bytes(header[20:24], "big")
+    return (width, height) if width > 0 and height > 0 else None
+
+
+class DocxReportBuilder:
+    def __init__(self, title: str):
+        self.title = title
+        self.body: list[str] = []
+        self.rels: list[tuple[str, str, str]] = []
+        self.media: list[tuple[str, Path]] = []
+        self.next_rid = 1
+
+    def add_paragraph(self, text: Any = "", style: str | None = None, bold: bool = False) -> None:
+        self.body.append(docx_para(text, style, bold))
+
+    def add_heading(self, text: Any, level: int = 1) -> None:
+        self.add_paragraph(text, f"Heading{min(max(level, 1), 3)}")
+
+    def add_table(self, rows: list[list[Any]], widths: list[int], header: bool = True) -> None:
+        if rows:
+            self.body.append(docx_table(rows, widths, header))
+            self.add_paragraph("")
+
+    def add_image(self, image_path: Path, caption: str, max_width_in: float = 5.9) -> None:
+        dimensions = png_dimensions(image_path)
+        if dimensions is None:
+            return
+
+        width_px, height_px = dimensions
+        max_width_emu = int(max_width_in * 914400)
+        height_emu = int(max_width_emu * (height_px / width_px))
+        media_name = f"image{len(self.media) + 1}.png"
+        rid = f"rId{self.next_rid}"
+        self.next_rid += 1
+        self.media.append((media_name, image_path))
+        self.rels.append((rid, "http://schemas.openxmlformats.org/officeDocument/2006/relationships/image", f"media/{media_name}"))
+        self.add_paragraph(caption, "Caption", True)
+        self.body.append(
+            "<w:p><w:r><w:drawing><wp:inline xmlns:wp=\"http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing\" distT=\"0\" distB=\"0\" distL=\"0\" distR=\"0\">"
+            f"<wp:extent cx=\"{max_width_emu}\" cy=\"{height_emu}\"/>"
+            "<wp:docPr id=\"1\" name=\"Plot\"/>"
+            "<a:graphic xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\"><a:graphicData uri=\"http://schemas.openxmlformats.org/drawingml/2006/picture\">"
+            "<pic:pic xmlns:pic=\"http://schemas.openxmlformats.org/drawingml/2006/picture\">"
+            "<pic:nvPicPr><pic:cNvPr id=\"0\" name=\"Plot\"/><pic:cNvPicPr/></pic:nvPicPr>"
+            "<pic:blipFill>"
+            f"<a:blip r:embed=\"{rid}\" xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\"/>"
+            "<a:stretch><a:fillRect/></a:stretch></pic:blipFill>"
+            f"<pic:spPr><a:xfrm><a:off x=\"0\" y=\"0\"/><a:ext cx=\"{max_width_emu}\" cy=\"{height_emu}\"/></a:xfrm><a:prstGeom prst=\"rect\"/></pic:spPr>"
+            "</pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>"
+        )
+
+    def document_xml(self) -> str:
+        return (
+            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" '
+            'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
+            f"<w:body>{''.join(self.body)}"
+            '<w:sectPr><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1080" w:right="1080" w:bottom="1080" w:left="1080" w:header="720" w:footer="720" w:gutter="0"/></w:sectPr>'
+            "</w:body></w:document>"
+        )
+
+    def styles_xml(self) -> str:
+        return (
+            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            '<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+            '<w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/><w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial"/><w:sz w:val="22"/><w:color w:val="112033"/></w:rPr><w:pPr><w:spacing w:after="120" w:line="260" w:lineRule="auto"/></w:pPr></w:style>'
+            '<w:style w:type="paragraph" w:styleId="Title"><w:name w:val="Title"/><w:basedOn w:val="Normal"/><w:rPr><w:b/><w:sz w:val="44"/><w:color w:val="006FA6"/></w:rPr><w:pPr><w:spacing w:after="180"/></w:pPr></w:style>'
+            '<w:style w:type="paragraph" w:styleId="Subtitle"><w:name w:val="Subtitle"/><w:basedOn w:val="Normal"/><w:rPr><w:sz w:val="24"/><w:color w:val="5B6D80"/></w:rPr></w:style>'
+            '<w:style w:type="paragraph" w:styleId="Heading1"><w:name w:val="heading 1"/><w:basedOn w:val="Normal"/><w:rPr><w:b/><w:sz w:val="32"/><w:color w:val="006FA6"/></w:rPr><w:pPr><w:spacing w:before="240" w:after="120"/></w:pPr></w:style>'
+            '<w:style w:type="paragraph" w:styleId="Heading2"><w:name w:val="heading 2"/><w:basedOn w:val="Normal"/><w:rPr><w:b/><w:sz w:val="26"/><w:color w:val="24364A"/></w:rPr><w:pPr><w:spacing w:before="180" w:after="100"/></w:pPr></w:style>'
+            '<w:style w:type="paragraph" w:styleId="Heading3"><w:name w:val="heading 3"/><w:basedOn w:val="Normal"/><w:rPr><w:b/><w:sz w:val="23"/><w:color w:val="24364A"/></w:rPr><w:pPr><w:spacing w:before="140" w:after="80"/></w:pPr></w:style>'
+            '<w:style w:type="paragraph" w:styleId="Caption"><w:name w:val="Caption"/><w:basedOn w:val="Normal"/><w:rPr><w:b/><w:sz w:val="20"/><w:color w:val="5B6D80"/></w:rPr><w:pPr><w:spacing w:before="100" w:after="80"/></w:pPr></w:style>'
+            "</w:styles>"
+        )
+
+    def relationships_xml(self) -> str:
+        relationships = "".join(
+            f'<Relationship Id="{rid}" Type="{rel_type}" Target="{target}"/>'
+            for rid, rel_type, target in self.rels
+        )
+        return f'<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">{relationships}</Relationships>'
+
+    def content_types_xml(self) -> str:
+        return (
+            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+            '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+            '<Default Extension="xml" ContentType="application/xml"/>'
+            '<Default Extension="png" ContentType="image/png"/>'
+            '<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>'
+            '<Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>'
+            '<Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/>'
+            '<Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/>'
+            "</Types>"
+        )
+
+    def write(self, output_path: Path) -> None:
+        with zipfile.ZipFile(extended_path(output_path), "w", zipfile.ZIP_DEFLATED) as archive:
+            archive.writestr("[Content_Types].xml", self.content_types_xml())
+            archive.writestr(
+                "_rels/.rels",
+                '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/><Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/extended-properties" Target="docProps/app.xml"/></Relationships>',
+            )
+            archive.writestr("word/document.xml", self.document_xml())
+            archive.writestr("word/styles.xml", self.styles_xml())
+            archive.writestr("word/_rels/document.xml.rels", self.relationships_xml())
+            archive.writestr(
+                "docProps/core.xml",
+                f'<?xml version="1.0" encoding="UTF-8" standalone="yes"?><cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/"><dc:title>{xml_text(self.title)}</dc:title><dc:creator>DAMSpy VC</dc:creator><dcterms:created>{datetime.now(timezone.utc).isoformat()}</dcterms:created></cp:coreProperties>',
+            )
+            archive.writestr(
+                "docProps/app.xml",
+                '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties"><Application>DAMSpy VC</Application></Properties>',
+            )
+            for media_name, image_path in self.media:
+                archive.write(extended_path(image_path), f"word/media/{media_name}")
+
+
+def write_analyser_docx_summary(logs_root: Path, measurement_id: str) -> Path:
+    measurement_dir, yaml_path, results_dir = resolve_measurement(logs_root, measurement_id)
+    dataset = load_measurement_dataset(logs_root, measurement_id)
+    yaml_dimensions = read_yaml_named_dimensions(yaml_path)
+    output_path = measurement_dir / "analyser_summary.docx"
+    builder = DocxReportBuilder("DAMSpy Results Analyser Summary")
+
+    builder.add_paragraph("DAMSpy Results Analyser Summary", "Title")
+    builder.add_paragraph(dataset.get("measurement_name", measurement_id), "Subtitle")
+    builder.add_table(
+        [
+            ["Field", "Value"],
+            ["Test date", report_value(dataset.get("test_date") or dataset.get("yaml_created_at"))],
+            ["Tester", ANALYSER_TESTER_NAME],
+            ["Measurement folder", report_value(dataset.get("measurement_name"))],
+            ["Selected YAML", report_value(dataset.get("yaml_relative_path"))],
+            ["Global dB ref", report_dbm(dataset.get("global_peak_dbm"))],
+        ],
+        [2500, 6860],
+    )
+
+    builder.add_heading("Results Analyser Details", 1)
+    builder.add_table(
+        [
+            ["Field", "Value"],
+            ["DUT hardware config", report_value(dataset.get("dut_hardware_config"))],
+            ["DUT serial number", report_value(dataset.get("dut_serial_number"))],
+            ["TX mode", report_value(dataset.get("tx_mode"))],
+            ["RX antenna", report_value(dataset.get("rx_antenna_name"))],
+            ["RX antenna comment", report_value(dataset.get("rx_antenna_comment"))],
+            ["RX antenna gain", report_value(dataset.get("rx_antenna_gain_dbi"), " dBi")],
+            ["RX cable loss", report_db(dataset.get("rx_cable_loss_db"))],
+            ["RX distance", report_value(dataset.get("rx_dist_m"), " m")],
+            ["Folders with data", report_value(len(dataset.get("folders") or []))],
+        ],
+        [2800, 6560],
+    )
+
+    builder.add_heading("YAML Summary", 1)
+    yaml_rows = [["Field", "Value"]]
+    for key, value in {**read_yaml_summary_fields(yaml_path), **yaml_dimensions}.items():
+        if isinstance(value, list):
+            display_value = ", ".join(str(item) for item in value)
+        else:
+            display_value = value
+        yaml_rows.append([key.replace("_", " "), report_value(display_value)])
+    builder.add_table(yaml_rows, [2800, 6560])
+
+    builder.add_heading("Plot Summary", 1)
+    plot_rows = [["Polarisation", "Orientation", "Series", "Peak", "Minimum"]]
+    for plot in dataset.get("plots") or []:
+        values = [
+            point["rx_peak_dbm"]
+            for series in plot.get("series", [])
+            for point in series.get("points", [])
+            if coerce_float(point.get("rx_peak_dbm")) is not None
+        ]
+        plot_rows.append(
+            [
+                plot.get("polarisation"),
+                plot.get("orientation"),
+                len(plot.get("series") or []),
+                report_dbm(max(values) if values else None),
+                report_dbm(min(values) if values else None),
+            ]
+        )
+    builder.add_table(plot_rows, [1700, 2100, 1400, 2080, 2080])
+
+    builder.add_heading("Plots", 1)
+    pngs_by_folder: dict[str, Path] = {}
+    for folder in dataset.get("folders") or []:
+        folder_path = results_dir / str(folder.get("folder_name", ""))
+        png_path = find_first_png(folder_path)
+        if png_path is not None:
+            pngs_by_folder[str(folder.get("folder_name"))] = png_path
+
+    for plot in dataset.get("plots") or []:
+        builder.add_heading(f"{plot.get('polarisation')} / {plot.get('orientation')}", 2)
+        for series in plot.get("series") or []:
+            folder_name = str(series.get("folder_name", ""))
+            png_path = pngs_by_folder.get(folder_name)
+            if png_path is None:
+                continue
+            caption = (
+                f"{folder_name} | Channel {report_value(series.get('channel'))} | "
+                f"Power {report_value(series.get('power_level'))} | "
+                f"{report_hz(series.get('frequency_hz'))} | Peak {report_dbm(series.get('peak_dbm'))}"
+            )
+            builder.add_image(png_path, caption)
+
+    builder.write(output_path)
+    return output_path
+
+
 def load_measurement_dataset(logs_root: Path, measurement_id: str) -> dict[str, Any]:
     measurement_dir, yaml_path, results_dir = resolve_measurement(logs_root, measurement_id)
     if not path_is_file(yaml_path):
@@ -1235,6 +1550,10 @@ class WOYMRequestHandler(SimpleHTTPRequestHandler):
             self.handle_write_summary_csv()
             return
 
+        if clean_path == "/api/results-analyser/write-docx-summary":
+            self.handle_write_docx_summary()
+            return
+
         super().do_GET()
 
     def translate_path(self, path: str) -> str:
@@ -1314,6 +1633,36 @@ class WOYMRequestHandler(SimpleHTTPRequestHandler):
     def handle_write_summary_csv(self) -> None:
         try:
             output_path = write_measurement_summary_csv(self.logs_root)
+        except Exception as exc:
+            self.send_json({"error": str(exc)}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+            return
+
+        self.send_json(
+            {
+                "output_path": str(output_path),
+                "relative_path": display_path(output_path, self.logs_root),
+            }
+        )
+
+    def handle_write_docx_summary(self) -> None:
+        query = parse_qs(urlsplit(self.path).query)
+        measurement_id = query.get("measurement_id", [""])[0]
+
+        if not measurement_id:
+            self.send_json(
+                {"error": "measurement_id query parameter is required"},
+                status=HTTPStatus.BAD_REQUEST,
+            )
+            return
+
+        try:
+            output_path = write_analyser_docx_summary(self.logs_root, measurement_id)
+        except FileNotFoundError as exc:
+            self.send_json({"error": str(exc)}, status=HTTPStatus.NOT_FOUND)
+            return
+        except ValueError as exc:
+            self.send_json({"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
+            return
         except Exception as exc:
             self.send_json({"error": str(exc)}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
             return

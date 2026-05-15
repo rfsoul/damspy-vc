@@ -100,6 +100,23 @@ body[data-theme="light"] {
     linear-gradient(160deg, #ffffff 0%, #eef5fb 48%, #dbe8f4 100%);
 }
 
+body[data-theme="light"] .plot-card {
+  background: rgba(9, 16, 24, 0.94);
+  color: var(--plot-text);
+}
+
+body[data-theme="light"] .plot-svg .polar-paper {
+  fill: #111923;
+  stroke: rgba(255, 255, 255, 0.16);
+}
+
+body[data-theme="light"] .plot-legend .legend-item,
+body[data-theme="light"] .plot-legend .legend-reference {
+  background: rgba(255, 255, 255, 0.04);
+  border-color: rgba(255, 255, 255, 0.09);
+  color: var(--plot-muted);
+}
+
 * {
   box-sizing: border-box;
 }
