@@ -22,6 +22,11 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, unquote, urlsplit
 
+try:
+    from PIL import Image, ImageDraw, ImageFont
+except ImportError:  # pragma: no cover - exercised only when Pillow is unavailable at runtime.
+    Image = ImageDraw = ImageFont = None
+
 
 KNOWN_ROUTES = {"/", "/results-analyser", "/results-analyser/"}
 MEASUREMENT_SCOPE_BEST = "best"
@@ -29,6 +34,21 @@ MEASUREMENT_SCOPE_LOGS = "logs"
 MEASUREMENT_SCOPE_ALL = "all"
 BEST_FOLDER_NAME = "_best"
 ANALYSER_TESTER_NAME = "Alistair Morgan"
+CHANNEL_COLORS = [
+    "#66d7ff",
+    "#ffb266",
+    "#86efac",
+    "#f9a8d4",
+    "#c4b5fd",
+    "#fde047",
+    "#fb7185",
+    "#38bdf8",
+]
+FIXED_CHANNEL_COLORS = {
+    "0": "#ef4444",
+    "40": "#22c55e",
+    "80": "#3b82f6",
+}
 PREFERRED_DEFAULT_MEASUREMENT_ID = (
     BEST_FOLDER_NAME + "/"
     "Antenna_Pattern_Measurement-2026-04-10_11-22-16-"
@@ -1094,6 +1114,179 @@ def png_dimensions(path: Path) -> tuple[int, int] | None:
     return (width, height) if width > 0 and height > 0 else None
 
 
+def safe_report_filename(value: Any) -> str:
+    text = str(value or "plot").strip()
+    text = re.sub(r"[^A-Za-z0-9_.-]+", "_", text)
+    return text.strip("._") or "plot"
+
+
+def load_report_font(size: int, bold: bool = False) -> ImageFont.ImageFont:
+    candidates = [
+        "arialbd.ttf" if bold else "arial.ttf",
+        "segoeuib.ttf" if bold else "segoeui.ttf",
+        "DejaVuSans-Bold.ttf" if bold else "DejaVuSans.ttf",
+    ]
+
+    for candidate in candidates:
+        try:
+            return ImageFont.truetype(candidate, size)
+        except OSError:
+            continue
+
+    return ImageFont.load_default()
+
+
+def hex_to_rgb(value: str) -> tuple[int, int, int]:
+    cleaned = value.lstrip("#")
+    return tuple(int(cleaned[index:index + 2], 16) for index in (0, 2, 4))
+
+
+def db_to_amplitude_ratio(value: Any) -> float:
+    numeric_value = coerce_float(value)
+    if numeric_value is None:
+        return 0.0
+    return 10 ** (numeric_value / 20.0)
+
+
+def format_channel_label(channel: Any) -> str:
+    return "Ch ?" if channel is None or channel == "" else f"Ch {channel}"
+
+
+def format_power_level_label(value: Any) -> str:
+    if value is None or value == "":
+        return ""
+
+    numeric_value = coerce_float(value)
+    if numeric_value is not None:
+        return f"Pwr {numeric_value:g}"
+
+    return str(value)
+
+
+def format_series_label(entry: dict[str, Any]) -> str:
+    power_level = format_power_level_label(entry.get("power_level"))
+    return f"{format_channel_label(entry.get('channel'))} {power_level}".strip()
+
+
+def get_channel_color(channel: Any, index: int) -> str:
+    key = "" if channel is None else str(channel).strip()
+    return FIXED_CHANNEL_COLORS.get(key, CHANNEL_COLORS[index % len(CHANNEL_COLORS)])
+
+
+def polar_to_cartesian(center_x: int, center_y: int, radius: float, angle_deg: Any, value: float) -> tuple[float, float]:
+    angle = math.radians(float(angle_deg))
+    distance = radius * max(0.0, min(1.0, value))
+    return center_x + distance * math.sin(angle), center_y - distance * math.cos(angle)
+
+
+def draw_text_centered(draw: ImageDraw.ImageDraw, position: tuple[float, float], text: str, font: ImageFont.ImageFont, fill: str) -> None:
+    bounds = draw.textbbox((0, 0), text, font=font)
+    width = bounds[2] - bounds[0]
+    height = bounds[3] - bounds[1]
+    draw.text((position[0] - width / 2, position[1] - height / 2), text, font=font, fill=fill)
+
+
+def render_analyser_summary_plot(plot: dict[str, Any], output_path: Path) -> None:
+    if Image is None or ImageDraw is None or ImageFont is None:
+        raise RuntimeError("Pillow is required to render analyser summary plots")
+
+    width = 1000
+    height = 820
+    center_x = 500
+    center_y = 305
+    radius = 235
+    tile_bg = "#091018"
+    paper_bg = "#111923"
+    grid = "#3b4654"
+    axis = "#768394"
+    label = "#f4f7fb"
+    muted = "#c6d7e7"
+    accent = "#ffb266"
+    font_title = load_report_font(30, True)
+    font_body = load_report_font(22)
+    font_small = load_report_font(18, True)
+    font_legend = load_report_font(20, True)
+
+    image = Image.new("RGB", (width, height), tile_bg)
+    draw = ImageDraw.Draw(image)
+    draw.rounded_rectangle((14, 14, width - 14, height - 14), radius=32, fill=tile_bg, outline="#2c3948", width=2)
+    draw.rounded_rectangle((45, 64, width - 45, 610), radius=24, fill=paper_bg, outline="#3a4655", width=2)
+
+    title = f"{plot.get('polarisation', '-')} / {plot.get('orientation', '-')}"
+    draw.text((60, 24), title, fill=label, font=font_title)
+
+    series = sorted(plot.get("series") or [], key=lambda item: natural_sort_key(item.get("channel", "")))
+    all_values = [
+        coerce_float(point.get("rx_peak_dbm"))
+        for entry in series
+        for point in entry.get("points", [])
+    ]
+    values = [value for value in all_values if value is not None]
+    plot_peak = max(values) if values else None
+    plot_min = min(values) if values else None
+    draw.text((width - 365, 31), f"Max {report_dbm(plot_peak)} | Min {report_dbm(plot_min)}", fill=accent, font=font_body)
+
+    for angle in [0, 45, 90, 135, 180, 225, 270, 315]:
+        end = polar_to_cartesian(center_x, center_y, radius, angle, 1.0)
+        draw.line((center_x, center_y, end[0], end[1]), fill=grid, width=2)
+
+    for guide_db in [-20, -10, -6, -3]:
+        guide_radius = radius * db_to_amplitude_ratio(guide_db)
+        draw.ellipse(
+            (center_x - guide_radius, center_y - guide_radius, center_x + guide_radius, center_y + guide_radius),
+            outline="#8b98a8" if guide_db == -3 else grid,
+            width=2,
+        )
+        draw.text((center_x + 10, center_y - guide_radius - 22), f"{guide_db} dB", fill=muted, font=font_small)
+
+    draw.ellipse((center_x - radius, center_y - radius, center_x + radius, center_y + radius), outline=axis, width=3)
+
+    for angle in [0, 45, 90, 135, 180, 225, 270, 315]:
+        label_pos = polar_to_cartesian(center_x, center_y, radius + 34, angle, 1.0)
+        draw_text_centered(draw, label_pos, f"{angle}°", font_small, label)
+
+    if plot_peak is not None:
+        for index, entry in enumerate(series):
+            color = get_channel_color(entry.get("channel"), index)
+            points = []
+            for point in sorted(entry.get("points", []), key=lambda item: coerce_float(item.get("angle_deg")) or 0):
+                rx_peak = coerce_float(point.get("rx_peak_dbm"))
+                angle = coerce_float(point.get("angle_deg"))
+                if rx_peak is None or angle is None:
+                    continue
+                ratio = db_to_amplitude_ratio(rx_peak - plot_peak)
+                points.append(polar_to_cartesian(center_x, center_y, radius, angle, ratio))
+
+            if len(points) >= 2:
+                draw.line(points, fill=hex_to_rgb(color), width=5, joint="curve")
+
+    draw_text_centered(draw, (center_x, 625), "E/Emax (per plot, dB guides)", font_body, muted)
+
+    legend_y = 672
+    for index, entry in enumerate(series[:8]):
+        color = get_channel_color(entry.get("channel"), index)
+        row_y = legend_y + index * 24
+        draw.rounded_rectangle((64, row_y + 6, 82, row_y + 24), radius=9, fill=hex_to_rgb(color))
+        text = f"{format_series_label(entry)} | Peak {report_dbm(entry.get('peak_dbm'))}"
+        draw.text((96, row_y), text, fill=muted, font=font_legend)
+
+    image.save(extended_path(output_path), format="PNG")
+
+
+def render_analyser_summary_plots(measurement_dir: Path, dataset: dict[str, Any]) -> list[tuple[str, Path]]:
+    output_dir = measurement_dir / "analyser_summary_assets"
+    output_dir.mkdir(exist_ok=True)
+    rendered: list[tuple[str, Path]] = []
+
+    for plot in dataset.get("plots") or []:
+        name = f"summary_{safe_report_filename(plot.get('polarisation'))}_{safe_report_filename(plot.get('orientation'))}.png"
+        output_path = output_dir / name
+        render_analyser_summary_plot(plot, output_path)
+        rendered.append((f"{plot.get('polarisation', '-')} / {plot.get('orientation', '-')}", output_path))
+
+    return rendered
+
+
 class DocxReportBuilder:
     def __init__(self, title: str):
         self.title = title
@@ -1279,7 +1472,11 @@ def write_analyser_docx_summary(logs_root: Path, measurement_id: str) -> Path:
         )
     builder.add_table(plot_rows, [1700, 2100, 1400, 2080, 2080])
 
-    builder.add_heading("Plots", 1)
+    builder.add_heading("Analyser Summary Plots", 1)
+    for caption, image_path in render_analyser_summary_plots(measurement_dir, dataset):
+        builder.add_image(image_path, f"Analyser plot: {caption}", max_width_in=6.1)
+
+    builder.add_heading("Individual PNG Plots", 1)
     pngs_by_folder: dict[str, Path] = {}
     for folder in dataset.get("folders") or []:
         folder_path = results_dir / str(folder.get("folder_name", ""))
