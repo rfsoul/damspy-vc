@@ -1121,7 +1121,8 @@ class DocxReportBuilder:
         width_px, height_px = dimensions
         max_width_emu = int(max_width_in * 914400)
         height_emu = int(max_width_emu * (height_px / width_px))
-        media_name = f"image{len(self.media) + 1}.png"
+        image_index = len(self.media) + 1
+        media_name = f"image{image_index}.png"
         rid = f"rId{self.next_rid}"
         self.next_rid += 1
         self.media.append((media_name, image_path))
@@ -1130,14 +1131,15 @@ class DocxReportBuilder:
         self.body.append(
             "<w:p><w:r><w:drawing><wp:inline xmlns:wp=\"http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing\" distT=\"0\" distB=\"0\" distL=\"0\" distR=\"0\">"
             f"<wp:extent cx=\"{max_width_emu}\" cy=\"{height_emu}\"/>"
-            "<wp:docPr id=\"1\" name=\"Plot\"/>"
+            f"<wp:docPr id=\"{image_index}\" name=\"Plot {image_index}\"/>"
+            '<wp:cNvGraphicFramePr><a:graphicFrameLocks xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" noChangeAspect="1"/></wp:cNvGraphicFramePr>'
             "<a:graphic xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\"><a:graphicData uri=\"http://schemas.openxmlformats.org/drawingml/2006/picture\">"
             "<pic:pic xmlns:pic=\"http://schemas.openxmlformats.org/drawingml/2006/picture\">"
-            "<pic:nvPicPr><pic:cNvPr id=\"0\" name=\"Plot\"/><pic:cNvPicPr/></pic:nvPicPr>"
+            f"<pic:nvPicPr><pic:cNvPr id=\"{image_index}\" name=\"Plot {image_index}\"/><pic:cNvPicPr/></pic:nvPicPr>"
             "<pic:blipFill>"
             f"<a:blip r:embed=\"{rid}\" xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\"/>"
             "<a:stretch><a:fillRect/></a:stretch></pic:blipFill>"
-            f"<pic:spPr><a:xfrm><a:off x=\"0\" y=\"0\"/><a:ext cx=\"{max_width_emu}\" cy=\"{height_emu}\"/></a:xfrm><a:prstGeom prst=\"rect\"/></pic:spPr>"
+            f"<pic:spPr><a:xfrm><a:off x=\"0\" y=\"0\"/><a:ext cx=\"{max_width_emu}\" cy=\"{height_emu}\"/></a:xfrm><a:prstGeom prst=\"rect\"><a:avLst/></a:prstGeom></pic:spPr>"
             "</pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>"
         )
 
@@ -1166,11 +1168,12 @@ class DocxReportBuilder:
         )
 
     def relationships_xml(self) -> str:
+        style_relationship = '<Relationship Id="rIdStyles" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>'
         relationships = "".join(
             f'<Relationship Id="{rid}" Type="{rel_type}" Target="{target}"/>'
             for rid, rel_type, target in self.rels
         )
-        return f'<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">{relationships}</Relationships>'
+        return f'<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">{style_relationship}{relationships}</Relationships>'
 
     def content_types_xml(self) -> str:
         return (
@@ -1198,7 +1201,7 @@ class DocxReportBuilder:
             archive.writestr("word/_rels/document.xml.rels", self.relationships_xml())
             archive.writestr(
                 "docProps/core.xml",
-                f'<?xml version="1.0" encoding="UTF-8" standalone="yes"?><cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/"><dc:title>{xml_text(self.title)}</dc:title><dc:creator>DAMSpy VC</dc:creator><dcterms:created>{datetime.now(timezone.utc).isoformat()}</dcterms:created></cp:coreProperties>',
+                f'<?xml version="1.0" encoding="UTF-8" standalone="yes"?><cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"><dc:title>{xml_text(self.title)}</dc:title><dc:creator>DAMSpy VC</dc:creator><dcterms:created xsi:type="dcterms:W3CDTF">{datetime.now(timezone.utc).replace(microsecond=0).isoformat()}</dcterms:created></cp:coreProperties>',
             )
             archive.writestr(
                 "docProps/app.xml",
