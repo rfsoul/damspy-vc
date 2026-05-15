@@ -231,6 +231,17 @@
             <p id="plotModeDescription" class="panel-description">Hover to inspect values. Click a chart to pin the readout. Each plot normalises its overlaid channels to that plot's strongest point in E/Emax form, with dB guide circles from -3 dB to -20 dB.</p>
           </div>
           <div class="plot-section-controls" role="group" aria-label="Plot display mode">
+            <label class="plot-control-field" for="plotFolderScopeSelect">
+              <span>Folder</span>
+              <select id="plotFolderScopeSelect" class="plot-control-select">
+                <option value="best" selected>Best Folder</option>
+                <option value="logs">DAMspy Logs</option>
+              </select>
+            </label>
+            <label class="plot-control-field" for="plotMinimumDbInput">
+              <span>Min dB</span>
+              <input id="plotMinimumDbInput" class="plot-control-input" type="number" value="-25" step="1">
+            </label>
             <button id="plotModeEemaxButton" class="button button-ghost button-small is-active" type="button" data-plot-mode="e_over_emax">E/Emax</button>
             <button id="plotModeDbButton" class="button button-ghost button-small" type="button" data-plot-mode="db">dB</button>
             <button id="differenceOverlayButton" class="button button-ghost button-small" type="button">Show Channel Delta</button>
@@ -245,6 +256,6 @@
     </section>
   </main>
 
-  <script src="/src/app.js?v=20260504c"></script>
+  <script src="/src/app.js?v=20260515a"></script>
 </body>
 </html>

@@ -19,6 +19,11 @@ const PLOT_DISPLAY_MODES = {
   E_OVER_EMAX: "e_over_emax",
   DB: "db"
 };
+const PLOT_FOLDER_SCOPES = {
+  BEST: "best",
+  LOGS: "logs"
+};
+const DEFAULT_PLOT_MIN_DB = -25;
 const E_OVER_EMAX_DB_GUIDES = [-20, -10, -6, -3];
 const FIXED_CHANNEL_COLORS = new Map([
   ["0", "#ef4444"],
@@ -74,6 +79,8 @@ const analyserElements = {
   testFolderList: document.getElementById("testFolderList"),
   plotGridContainer: document.getElementById("plotGridContainer"),
   plotModeDescription: document.getElementById("plotModeDescription"),
+  plotFolderScopeSelect: document.getElementById("plotFolderScopeSelect"),
+  plotMinimumDbInput: document.getElementById("plotMinimumDbInput"),
   differenceOverlayButton: document.getElementById("differenceOverlayButton"),
   livePlotRefreshButton: document.getElementById("livePlotRefreshButton"),
   plotModeButtons: Array.from(document.querySelectorAll("[data-plot-mode]"))
@@ -95,6 +102,8 @@ const analyserState = {
   selectedMeasurementId: "",
   dataset: null,
   plotDisplayMode: PLOT_DISPLAY_MODES.E_OVER_EMAX,
+  plotFolderScope: PLOT_FOLDER_SCOPES.BEST,
+  plotMinimumDb: DEFAULT_PLOT_MIN_DB,
   showDifferenceOverlay: false,
   pickerOpen: false,
   listRequestInFlight: false,
@@ -708,7 +717,7 @@ async function loadMeasurementList(options = {}) {
   analyserState.listRequestInFlight = true;
 
   try {
-    const data = await fetchJson("/api/results-analyser/yamls");
+    const data = await fetchJson("/api/results-analyser/yamls?scope=" + encodeURIComponent(analyserState.plotFolderScope));
     analyserState.measurements = Array.isArray(data.measurements) ? data.measurements : [];
     analyserState.defaultMeasurementId = data.default_measurement_id || "";
     const currentExists = analyserState.measurements.some((measurement) => measurement.measurement_id === analyserState.selectedMeasurementId);
@@ -907,7 +916,7 @@ function getPlotModeDescription() {
 
   return analyserState.showDifferenceOverlay
     ? "Hover to inspect values on the plot. Click a chart to pin the readout. dB values are relative to the selected set's strongest peak, with per-channel delta overlays for highest minus lowest power."
-    : "Hover to inspect values on the plot. Click a chart to pin the readout. dB values are relative to the selected set's strongest peak.";
+    : "Hover to inspect values on the plot. Click a chart to pin the readout. dB values are relative to the selected set's strongest peak, using the selected minimum dB floor.";
 }
 
 function updatePlotModeUi() {
@@ -918,6 +927,16 @@ function updatePlotModeUi() {
   }
 
   updateDifferenceOverlayButton();
+}
+
+function updatePlotControlsUi() {
+  if (analyserElements.plotFolderScopeSelect) {
+    analyserElements.plotFolderScopeSelect.value = analyserState.plotFolderScope;
+  }
+
+  if (analyserElements.plotMinimumDbInput) {
+    analyserElements.plotMinimumDbInput.value = String(analyserState.plotMinimumDb);
+  }
 }
 
 function updateLivePlotRefreshButton() {
@@ -1035,6 +1054,24 @@ function getPlotPeakDbm(series) {
     .filter((value) => Number.isFinite(value));
 
   return peaks.length ? Math.max(...peaks) : Number.NaN;
+}
+
+function getPlotMinDbm(series) {
+  const values = series
+    .flatMap((entry) => entry.points.map((point) => Number(point.rx_peak_dbm)))
+    .filter((value) => Number.isFinite(value));
+
+  return values.length ? Math.min(...values) : Number.NaN;
+}
+
+function normalisePlotMinimumDb(value) {
+  const numericValue = Number(value);
+
+  if (!Number.isFinite(numericValue)) {
+    return DEFAULT_PLOT_MIN_DB;
+  }
+
+  return Math.min(-1, Math.max(-120, numericValue));
 }
 
 function buildDbRingTicks(minValue, maxValue = 0) {
@@ -1198,6 +1235,7 @@ function updateDifferenceOverlayButton() {
 
 function prepareSeriesForPlot(series, dataset, mode, showDifferenceOverlay = false) {
   const plotPeakDbm = getPlotPeakDbm(series);
+  const plotMinDbm = getPlotMinDbm(series);
   const globalPeakDbm = Number(dataset.global_peak_dbm);
   const preparedSeries = series.map((entry) => ({
     ...entry,
@@ -1218,18 +1256,16 @@ function prepareSeriesForPlot(series, dataset, mode, showDifferenceOverlay = fal
       .sort((left, right) => left.angle_deg - right.angle_deg)
   }));
   const differenceSeries = mode === PLOT_DISPLAY_MODES.DB && showDifferenceOverlay ? buildDifferenceSeries(preparedSeries) : [];
-  const differenceValues = differenceSeries
-    .flatMap((entry) => entry.points.map((point) => Number(point.normalised_delta_db)))
-    .filter((value) => Number.isFinite(value));
   const yMin = mode === PLOT_DISPLAY_MODES.E_OVER_EMAX
     ? 0
-    : Math.min(Number(dataset.y_range.min), differenceValues.length ? Math.floor(Math.min(...differenceValues) / 5) * 5 : 0);
+    : normalisePlotMinimumDb(analyserState.plotMinimumDb);
   const yMax = mode === PLOT_DISPLAY_MODES.E_OVER_EMAX
     ? 1
     : 0;
 
   return {
     plotPeakDbm,
+    plotMinDbm,
     globalPeakDbm,
     yMin,
     yMax,
@@ -1344,8 +1380,8 @@ function createPlotLegend(preparedPlot, mode) {
   const reference = document.createElement("div");
   reference.className = "legend-reference";
   reference.textContent = mode === PLOT_DISPLAY_MODES.E_OVER_EMAX
-    ? "Max " + formatDbm(preparedPlot.plotPeakDbm)
-    : "Ref " + formatDbm(preparedPlot.globalPeakDbm);
+    ? "Max " + formatDbm(preparedPlot.plotPeakDbm) + " | Min " + formatDbm(preparedPlot.plotMinDbm)
+    : "Ref " + formatDbm(preparedPlot.globalPeakDbm) + " | Min " + formatDbm(preparedPlot.plotMinDbm);
   legend.append(reference);
 
   for (const entry of preparedPlot.series) {
@@ -1604,7 +1640,7 @@ function createPlotSvg(preparedPlot, row, column, mode) {
       return radius * Math.max(0, Math.min(1, numericValue));
     }
 
-    return radius * ((numericValue - yMin) / (yMax - yMin || 1));
+    return radius * Math.max(0, Math.min(1, (numericValue - yMin) / (yMax - yMin || 1)));
   };
 
   const polarToCartesian = (angleDeg, value) => {
@@ -1894,6 +1930,38 @@ function bindAnalyserControls() {
     });
   }
 
+  if (analyserElements.plotFolderScopeSelect) {
+    analyserElements.plotFolderScopeSelect.addEventListener("change", async () => {
+      const nextScope = analyserElements.plotFolderScopeSelect.value === PLOT_FOLDER_SCOPES.LOGS
+        ? PLOT_FOLDER_SCOPES.LOGS
+        : PLOT_FOLDER_SCOPES.BEST;
+
+      if (nextScope === analyserState.plotFolderScope) {
+        return;
+      }
+
+      analyserState.plotFolderScope = nextScope;
+      analyserState.measurements = [];
+      analyserState.defaultMeasurementId = "";
+      analyserState.selectedMeasurementId = "";
+      analyserState.dataset = null;
+      renderAnalyserEmpty("Loading measurements from " + (nextScope === PLOT_FOLDER_SCOPES.BEST ? "the best folder." : "DAMspy logs."));
+      await loadMeasurementList({ autoLoad: true });
+    });
+  }
+
+  if (analyserElements.plotMinimumDbInput) {
+    analyserElements.plotMinimumDbInput.addEventListener("change", () => {
+      analyserState.plotMinimumDb = normalisePlotMinimumDb(analyserElements.plotMinimumDbInput.value);
+      updatePlotControlsUi();
+      updatePlotModeUi();
+
+      if (analyserState.dataset) {
+        renderPlotGrid(analyserState.dataset);
+      }
+    });
+  }
+
   for (const button of analyserElements.plotModeButtons) {
     button.addEventListener("click", () => {
       const nextMode = button.dataset.plotMode;
@@ -1953,6 +2021,7 @@ bindAnalyserControls();
 bindThemeControls();
 initialiseCollapsedAnalyserPanels();
 applyTheme(readStoredTheme());
+updatePlotControlsUi();
 updatePlotModeUi();
 updateLivePlotRefreshButton();
 renderRoute();

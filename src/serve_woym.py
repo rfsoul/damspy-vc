@@ -22,8 +22,12 @@ from urllib.parse import parse_qs, unquote, urlsplit
 
 
 KNOWN_ROUTES = {"/", "/results-analyser", "/results-analyser/"}
+MEASUREMENT_SCOPE_BEST = "best"
+MEASUREMENT_SCOPE_LOGS = "logs"
+MEASUREMENT_SCOPE_ALL = "all"
+BEST_FOLDER_NAME = "_best"
 PREFERRED_DEFAULT_MEASUREMENT_ID = (
-    "_best/"
+    BEST_FOLDER_NAME + "/"
     "Antenna_Pattern_Measurement-2026-04-10_11-22-16-"
     "hendrix-tx_V3-04F_002-bodyworn-Ori_ori1_ori2-Ch_0_40_80-"
     "Pwr_10-Pol_H_V-Step_2deg-RxAnt_Horn_WR340"
@@ -623,12 +627,26 @@ def measurement_manifest(logs_root: Path, measurement_dir: Path) -> dict[str, An
     }
 
 
-def list_measurements(logs_root: Path) -> list[dict[str, Any]]:
+def measurement_is_in_best_folder(measurement_id: str) -> bool:
+    first_part = Path(measurement_id).parts[0] if Path(measurement_id).parts else ""
+    return first_part == BEST_FOLDER_NAME
+
+
+def list_measurements(logs_root: Path, scope: str = MEASUREMENT_SCOPE_ALL) -> list[dict[str, Any]]:
     manifests: list[dict[str, Any]] = []
+    requested_scope = scope if scope in {MEASUREMENT_SCOPE_BEST, MEASUREMENT_SCOPE_LOGS, MEASUREMENT_SCOPE_ALL} else MEASUREMENT_SCOPE_ALL
 
     for measurement_dir in iter_measurement_directories(logs_root):
         manifest = measurement_manifest(logs_root, measurement_dir)
         if manifest is not None:
+            is_best_measurement = measurement_is_in_best_folder(str(manifest["measurement_id"]))
+
+            if requested_scope == MEASUREMENT_SCOPE_BEST and not is_best_measurement:
+                continue
+
+            if requested_scope == MEASUREMENT_SCOPE_LOGS and is_best_measurement:
+                continue
+
             manifests.append(manifest)
 
     manifests.sort(key=lambda item: item["_sort_at"], reverse=True)
@@ -1252,7 +1270,9 @@ class WOYMRequestHandler(SimpleHTTPRequestHandler):
         self.wfile.write(body)
 
     def handle_yaml_list(self) -> None:
-        measurements = list_measurements(self.logs_root)
+        query = parse_qs(urlsplit(self.path).query)
+        scope = query.get("scope", [MEASUREMENT_SCOPE_BEST])[0]
+        measurements = list_measurements(self.logs_root, scope)
         measurement_ids = {measurement["measurement_id"] for measurement in measurements}
         default_measurement_id = (
             PREFERRED_DEFAULT_MEASUREMENT_ID
