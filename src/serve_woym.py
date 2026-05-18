@@ -667,9 +667,6 @@ def list_measurements(logs_root: Path, scope: str = MEASUREMENT_SCOPE_ALL) -> li
             if requested_scope == MEASUREMENT_SCOPE_BEST and not is_best_measurement:
                 continue
 
-            if requested_scope == MEASUREMENT_SCOPE_LOGS and is_best_measurement:
-                continue
-
             manifests.append(manifest)
 
     manifests.sort(key=lambda item: item["_sort_at"], reverse=True)
@@ -1793,11 +1790,19 @@ class WOYMRequestHandler(SimpleHTTPRequestHandler):
         scope = query.get("scope", [MEASUREMENT_SCOPE_BEST])[0]
         measurements = list_measurements(self.logs_root, scope)
         measurement_ids = {measurement["measurement_id"] for measurement in measurements}
-        default_measurement_id = (
-            PREFERRED_DEFAULT_MEASUREMENT_ID
-            if PREFERRED_DEFAULT_MEASUREMENT_ID in measurement_ids
-            else measurements[0]["measurement_id"] if measurements else None
-        )
+        if scope == MEASUREMENT_SCOPE_BEST and PREFERRED_DEFAULT_MEASUREMENT_ID in measurement_ids:
+            default_measurement_id = PREFERRED_DEFAULT_MEASUREMENT_ID
+        elif scope == MEASUREMENT_SCOPE_LOGS:
+            default_measurement_id = next(
+                (
+                    measurement["measurement_id"]
+                    for measurement in measurements
+                    if not measurement_is_in_best_folder(str(measurement["measurement_id"]))
+                ),
+                measurements[0]["measurement_id"] if measurements else None,
+            )
+        else:
+            default_measurement_id = measurements[0]["measurement_id"] if measurements else None
         self.send_json(
             {
                 "measurements": measurements,
