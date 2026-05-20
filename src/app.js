@@ -825,7 +825,25 @@ async function fetchJson(url, options = {}) {
   });
 
   if (!response.ok) {
-    throw new Error("HTTP " + response.status + " " + response.statusText);
+    let errorMessage = "HTTP " + response.status + " " + response.statusText;
+
+    try {
+      const payload = await response.json();
+      if (payload && typeof payload.error === "string" && payload.error.trim()) {
+        errorMessage = payload.error.trim();
+      }
+    } catch (error) {
+      try {
+        const text = await response.text();
+        if (text && text.trim()) {
+          errorMessage = text.trim();
+        }
+      } catch (innerError) {
+        // Keep the original HTTP status message.
+      }
+    }
+
+    throw new Error(errorMessage);
   }
 
   return response.json();

@@ -13,6 +13,7 @@ import os
 import posixpath
 import re
 import sys
+import tempfile
 import webbrowser
 import zipfile
 from datetime import datetime, timezone
@@ -1394,11 +1395,10 @@ def render_analyser_summary_plot(plot: dict[str, Any], output_path: Path, measur
 
 
 def render_analyser_summary_plots(
-    measurement_dir: Path,
+    output_dir: Path,
     dataset: dict[str, Any],
     measurement_role: str,
 ) -> list[tuple[str, Path]]:
-    output_dir = measurement_dir / "analyser_summary_assets"
     output_dir.mkdir(exist_ok=True)
     rendered: list[tuple[str, Path]] = []
 
@@ -1598,37 +1598,39 @@ def write_analyser_docx_summary(logs_root: Path, measurement_id: str, measuremen
                 report_dbm(max(values) if values else None),
                 report_dbm(min(values) if values else None),
             ]
-        )
+    )
     builder.add_table(plot_rows, [1700, 2100, 1400, 2080, 2080])
 
     builder.add_heading("Analyser Summary Plots", 1)
-    for caption, image_path in render_analyser_summary_plots(measurement_dir, dataset, resolved_measurement_role):
-        builder.add_image(image_path, f"Analyser plot: {caption}", max_width_in=6.1)
+    with tempfile.TemporaryDirectory(prefix="damspy_docx_") as temp_dir_name:
+        temp_output_dir = Path(temp_dir_name)
+        for caption, image_path in render_analyser_summary_plots(temp_output_dir, dataset, resolved_measurement_role):
+            builder.add_image(image_path, f"Analyser plot: {caption}", max_width_in=6.1)
 
-    builder.add_heading("Individual PNG Plots", 1)
-    pngs_by_folder: dict[str, Path] = {}
-    for folder in dataset.get("folders") or []:
-        folder_path = results_dir / str(folder.get("folder_name", ""))
-        png_path = find_first_png(folder_path)
-        if png_path is not None:
-            pngs_by_folder[str(folder.get("folder_name"))] = png_path
+        builder.add_heading("Individual PNG Plots", 1)
+        pngs_by_folder: dict[str, Path] = {}
+        for folder in dataset.get("folders") or []:
+            folder_path = results_dir / str(folder.get("folder_name", ""))
+            png_path = find_first_png(folder_path)
+            if png_path is not None:
+                pngs_by_folder[str(folder.get("folder_name"))] = png_path
 
-    for plot in dataset.get("plots") or []:
-        builder.add_heading(f"{plot.get('polarisation')} / {plot.get('orientation')}", 2)
-        for series in plot.get("series") or []:
-            folder_name = str(series.get("folder_name", ""))
-            png_path = pngs_by_folder.get(folder_name)
-            if png_path is None:
-                continue
-            caption = (
-                f"{folder_name} | Antenna {report_value(format_antenna_label(series.get('antenna')) or '-')} | "
-                f"Channel {report_value(series.get('channel'))} | "
-                f"Power {report_value(series.get('power_level'))} | "
-                f"{report_hz(series.get('frequency_hz'))} | Peak {report_dbm(series.get('peak_dbm'))}"
-            )
-            builder.add_image(png_path, caption)
+        for plot in dataset.get("plots") or []:
+            builder.add_heading(f"{plot.get('polarisation')} / {plot.get('orientation')}", 2)
+            for series in plot.get("series") or []:
+                folder_name = str(series.get("folder_name", ""))
+                png_path = pngs_by_folder.get(folder_name)
+                if png_path is None:
+                    continue
+                caption = (
+                    f"{folder_name} | Antenna {report_value(format_antenna_label(series.get('antenna')) or '-')} | "
+                    f"Channel {report_value(series.get('channel'))} | "
+                    f"Power {report_value(series.get('power_level'))} | "
+                    f"{report_hz(series.get('frequency_hz'))} | Peak {report_dbm(series.get('peak_dbm'))}"
+                )
+                builder.add_image(png_path, caption)
 
-    builder.write(output_path)
+        builder.write(output_path)
     return output_path
 
 
@@ -2008,6 +2010,18 @@ class WOYMRequestHandler(SimpleHTTPRequestHandler):
 
         try:
             output_path = write_analyser_docx_summary(self.logs_root, measurement_id, measurement_role)
+        except PermissionError as exc:
+            self.send_json(
+                {
+                    "error": (
+                        "Permission denied while writing the DOCX summary. "
+                        "Close the existing analyser_summary.docx if it is open in Word or locked by Explorer preview. "
+                        f"Path: {exc.filename or measurement_id}"
+                    ),
+                },
+                status=HTTPStatus.CONFLICT,
+            )
+            return
         except FileNotFoundError as exc:
             self.send_json({"error": str(exc)}, status=HTTPStatus.NOT_FOUND)
             return
