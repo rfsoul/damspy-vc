@@ -49,6 +49,8 @@ FIXED_CHANNEL_COLORS = {
     "40": "#22c55e",
     "80": "#3b82f6",
 }
+MEASUREMENT_ROLE_DUT = "dut"
+MEASUREMENT_ROLE_BASELINE = "baseline"
 PREFERRED_DEFAULT_MEASUREMENT_ID = (
     BEST_FOLDER_NAME + "/"
     "Antenna_Pattern_Measurement-2026-04-10_11-22-16-"
@@ -217,6 +219,117 @@ def coerce_float(value: Any) -> float | None:
         return None
 
     return numeric_value if math.isfinite(numeric_value) else None
+
+
+def normalise_measurement_role(value: Any) -> str | None:
+    text = str(value or "").strip().lower()
+    if text in {MEASUREMENT_ROLE_DUT, "device_under_test"}:
+        return MEASUREMENT_ROLE_DUT
+    if text in {MEASUREMENT_ROLE_BASELINE, "reference"}:
+        return MEASUREMENT_ROLE_BASELINE
+    return None
+
+
+def infer_measurement_role(*values: Any) -> str:
+    combined = " ".join(str(value or "") for value in values).strip().lower()
+
+    if "wireless-pro" in combined or "wireless pro" in combined:
+        return MEASUREMENT_ROLE_BASELINE
+
+    if "hendrix" in combined or "rxcc" in combined:
+        return MEASUREMENT_ROLE_DUT
+
+    return MEASUREMENT_ROLE_DUT
+
+
+def normalise_tx_antenna(value: Any, folder_name: str = "") -> str | None:
+    text = str(value or "").strip().lower()
+
+    if "secondary" in text:
+        return "secondary"
+    if "main" in text or "primary" in text:
+        return "main"
+
+    folder_text = folder_name.lower()
+    if "ant-secondary" in folder_text:
+        return "secondary"
+    if "ant-main" in folder_text:
+        return "main"
+
+    return None
+
+
+def format_antenna_label(value: Any) -> str:
+    antenna = normalise_tx_antenna(value)
+    if antenna == "secondary":
+        return "Secondary"
+    if antenna == "main":
+        return "Main"
+    return ""
+
+
+def series_line_pattern(antenna: Any, measurement_role: str) -> tuple[int, ...] | None:
+    role = normalise_measurement_role(measurement_role) or MEASUREMENT_ROLE_DUT
+    antenna_role = normalise_tx_antenna(antenna)
+
+    if role == MEASUREMENT_ROLE_DUT:
+        return None if antenna_role != "secondary" else (18, 10)
+
+    if antenna_role == "secondary":
+        return (2, 10, 18, 10)
+
+    return (2, 10)
+
+
+def interpolate_point(start: tuple[float, float], end: tuple[float, float], ratio: float) -> tuple[float, float]:
+    return (
+        start[0] + (end[0] - start[0]) * ratio,
+        start[1] + (end[1] - start[1]) * ratio,
+    )
+
+
+def draw_patterned_polyline(
+    draw: ImageDraw.ImageDraw,
+    points: list[tuple[float, float]],
+    fill: tuple[int, int, int],
+    width: int,
+    pattern: tuple[int, ...] | None,
+) -> None:
+    if len(points) < 2:
+        return
+
+    if not pattern:
+        draw.line(points, fill=fill, width=width, joint="curve")
+        return
+
+    pattern_values = [max(1.0, float(value)) for value in pattern]
+    pattern_index = 0
+    remaining = pattern_values[pattern_index]
+    drawing = True
+
+    for start, end in zip(points, points[1:]):
+        segment_length = math.hypot(end[0] - start[0], end[1] - start[1])
+        if segment_length <= 0:
+            continue
+
+        segment_offset = 0.0
+        while segment_offset < segment_length:
+            step = min(remaining, segment_length - segment_offset)
+            start_ratio = segment_offset / segment_length
+            end_ratio = (segment_offset + step) / segment_length
+            segment_start = interpolate_point(start, end, start_ratio)
+            segment_end = interpolate_point(start, end, end_ratio)
+
+            if drawing:
+                draw.line((segment_start, segment_end), fill=fill, width=width)
+
+            segment_offset += step
+            remaining -= step
+
+            if remaining <= 1e-6:
+                pattern_index = (pattern_index + 1) % len(pattern_values)
+                remaining = pattern_values[pattern_index]
+                drawing = pattern_index % 2 == 0
 
 
 def read_yaml_summary_fields(path: Path) -> dict[str, Any]:
@@ -1161,8 +1274,10 @@ def format_power_level_label(value: Any) -> str:
 
 
 def format_series_label(entry: dict[str, Any]) -> str:
+    antenna_label = format_antenna_label(entry.get("antenna"))
     power_level = format_power_level_label(entry.get("power_level"))
-    return f"{format_channel_label(entry.get('channel'))} {power_level}".strip()
+    parts = [antenna_label, format_channel_label(entry.get("channel")), power_level]
+    return " ".join(part for part in parts if part).strip()
 
 
 def get_channel_color(channel: Any, index: int) -> str:
@@ -1183,7 +1298,7 @@ def draw_text_centered(draw: ImageDraw.ImageDraw, position: tuple[float, float],
     draw.text((position[0] - width / 2, position[1] - height / 2), text, font=font, fill=fill)
 
 
-def render_analyser_summary_plot(plot: dict[str, Any], output_path: Path) -> None:
+def render_analyser_summary_plot(plot: dict[str, Any], output_path: Path, measurement_role: str) -> None:
     if Image is None or ImageDraw is None or ImageFont is None:
         raise RuntimeError("Pillow is required to render analyser summary plots")
 
@@ -1245,6 +1360,7 @@ def render_analyser_summary_plot(plot: dict[str, Any], output_path: Path) -> Non
     if plot_peak is not None:
         for index, entry in enumerate(series):
             color = get_channel_color(entry.get("channel"), index)
+            pattern = series_line_pattern(entry.get("antenna"), measurement_role)
             points = []
             for point in sorted(entry.get("points", []), key=lambda item: coerce_float(item.get("angle_deg")) or 0):
                 rx_peak = coerce_float(point.get("rx_peak_dbm"))
@@ -1255,22 +1371,33 @@ def render_analyser_summary_plot(plot: dict[str, Any], output_path: Path) -> Non
                 points.append(polar_to_cartesian(center_x, center_y, radius, angle, ratio))
 
             if len(points) >= 2:
-                draw.line(points, fill=hex_to_rgb(color), width=5, joint="curve")
+                draw_patterned_polyline(draw, points, hex_to_rgb(color), 5, pattern)
 
     draw_text_centered(draw, (center_x, 625), "E/Emax (per plot, dB guides)", font_body, muted)
 
     legend_y = 672
     for index, entry in enumerate(series[:8]):
         color = get_channel_color(entry.get("channel"), index)
+        pattern = series_line_pattern(entry.get("antenna"), measurement_role)
         row_y = legend_y + index * 24
-        draw.rounded_rectangle((64, row_y + 6, 82, row_y + 24), radius=9, fill=hex_to_rgb(color))
+        draw_patterned_polyline(
+            draw,
+            [(64, row_y + 15), (88, row_y + 15)],
+            hex_to_rgb(color),
+            5,
+            pattern,
+        )
         text = f"{format_series_label(entry)} | Peak {report_dbm(entry.get('peak_dbm'))}"
         draw.text((96, row_y), text, fill=muted, font=font_legend)
 
     image.save(extended_path(output_path), format="PNG")
 
 
-def render_analyser_summary_plots(measurement_dir: Path, dataset: dict[str, Any]) -> list[tuple[str, Path]]:
+def render_analyser_summary_plots(
+    measurement_dir: Path,
+    dataset: dict[str, Any],
+    measurement_role: str,
+) -> list[tuple[str, Path]]:
     output_dir = measurement_dir / "analyser_summary_assets"
     output_dir.mkdir(exist_ok=True)
     rendered: list[tuple[str, Path]] = []
@@ -1278,7 +1405,7 @@ def render_analyser_summary_plots(measurement_dir: Path, dataset: dict[str, Any]
     for plot in dataset.get("plots") or []:
         name = f"summary_{safe_report_filename(plot.get('polarisation'))}_{safe_report_filename(plot.get('orientation'))}.png"
         output_path = output_dir / name
-        render_analyser_summary_plot(plot, output_path)
+        render_analyser_summary_plot(plot, output_path, measurement_role)
         rendered.append((f"{plot.get('polarisation', '-')} / {plot.get('orientation', '-')}", output_path))
 
     return rendered
@@ -1401,12 +1528,16 @@ class DocxReportBuilder:
                 archive.write(extended_path(image_path), f"word/media/{media_name}")
 
 
-def write_analyser_docx_summary(logs_root: Path, measurement_id: str) -> Path:
+def write_analyser_docx_summary(logs_root: Path, measurement_id: str, measurement_role: str | None = None) -> Path:
     measurement_dir, yaml_path, results_dir = resolve_measurement(logs_root, measurement_id)
     dataset = load_measurement_dataset(logs_root, measurement_id)
     yaml_dimensions = read_yaml_named_dimensions(yaml_path)
     output_path = measurement_dir / "analyser_summary.docx"
     builder = DocxReportBuilder("DAMSpy Results Analyser Summary")
+    resolved_measurement_role = normalise_measurement_role(measurement_role) or infer_measurement_role(
+        dataset.get("dut_product"),
+        dataset.get("measurement_name"),
+    )
 
     builder.add_paragraph("DAMSpy Results Analyser Summary", "Title")
     builder.add_paragraph(dataset.get("measurement_name", measurement_id), "Subtitle")
@@ -1429,6 +1560,7 @@ def write_analyser_docx_summary(logs_root: Path, measurement_id: str) -> Path:
             ["DUT hardware config", report_value(dataset.get("dut_hardware_config"))],
             ["DUT serial number", report_value(dataset.get("dut_serial_number"))],
             ["TX mode", report_value(dataset.get("tx_mode"))],
+            ["Device role", resolved_measurement_role.title()],
             ["RX antenna", report_value(dataset.get("rx_antenna_name"))],
             ["RX antenna comment", report_value(dataset.get("rx_antenna_comment"))],
             ["RX antenna gain", report_value(dataset.get("rx_antenna_gain_dbi"), " dBi")],
@@ -1470,7 +1602,7 @@ def write_analyser_docx_summary(logs_root: Path, measurement_id: str) -> Path:
     builder.add_table(plot_rows, [1700, 2100, 1400, 2080, 2080])
 
     builder.add_heading("Analyser Summary Plots", 1)
-    for caption, image_path in render_analyser_summary_plots(measurement_dir, dataset):
+    for caption, image_path in render_analyser_summary_plots(measurement_dir, dataset, resolved_measurement_role):
         builder.add_image(image_path, f"Analyser plot: {caption}", max_width_in=6.1)
 
     builder.add_heading("Individual PNG Plots", 1)
@@ -1489,7 +1621,8 @@ def write_analyser_docx_summary(logs_root: Path, measurement_id: str) -> Path:
             if png_path is None:
                 continue
             caption = (
-                f"{folder_name} | Channel {report_value(series.get('channel'))} | "
+                f"{folder_name} | Antenna {report_value(format_antenna_label(series.get('antenna')) or '-')} | "
+                f"Channel {report_value(series.get('channel'))} | "
                 f"Power {report_value(series.get('power_level'))} | "
                 f"{report_hz(series.get('frequency_hz'))} | Peak {report_dbm(series.get('peak_dbm'))}"
             )
@@ -1580,12 +1713,14 @@ def load_measurement_dataset(logs_root: Path, measurement_id: str) -> dict[str, 
             tx_power_dbm,
             tx_cable_loss_db,
         )
+        tx_antenna = normalise_tx_antenna(series_info.get("antenna"), entry.name)
         folder_record = {
             "folder_name": entry.name,
             "orientation": metadata.get("orientation") or "unknown",
             "polarisation": metadata.get("polarisation") or "unknown",
             "channel": series_info.get("channel"),
             "power_level": series_info.get("power_level"),
+            "antenna": tx_antenna,
             "frequency_hz": frequency_hz,
             "peak_dbm": peak_dbm,
             "eirp_dbm": eirp_dbm,
@@ -1620,6 +1755,10 @@ def load_measurement_dataset(logs_root: Path, measurement_id: str) -> dict[str, 
             "yaml_relative_path": display_path(yaml_path, logs_root),
             "yaml_created_at": yaml_created_at,
             "updated_at": format_timestamp(updated_at),
+            "suggested_measurement_role": infer_measurement_role(
+                yaml_summary.get("dut_product"),
+                measurement_dir.name,
+            ),
             **yaml_summary,
             "global_peak_dbm": None,
             "rows": [],
@@ -1657,6 +1796,7 @@ def load_measurement_dataset(logs_root: Path, measurement_id: str) -> dict[str, 
                 "polarisation": folder["polarisation"],
                 "channel": folder["channel"],
                 "power_level": folder["power_level"],
+                "antenna": folder["antenna"],
                 "frequency_hz": folder["frequency_hz"],
                 "peak_dbm": round(folder["peak_dbm"], 6),
                 "eirp_dbm": round(folder["eirp_dbm"], 6) if folder["eirp_dbm"] is not None else None,
@@ -1674,6 +1814,7 @@ def load_measurement_dataset(logs_root: Path, measurement_id: str) -> dict[str, 
                     "folder_name": folder["folder_name"],
                     "channel": folder["channel"],
                     "power_level": folder["power_level"],
+                    "antenna": folder["antenna"],
                     "frequency_hz": folder["frequency_hz"],
                     "peak_dbm": round(folder["peak_dbm"], 6),
                     "eirp_dbm": round(folder["eirp_dbm"], 6) if folder["eirp_dbm"] is not None else None,
@@ -1706,6 +1847,10 @@ def load_measurement_dataset(logs_root: Path, measurement_id: str) -> dict[str, 
         "yaml_relative_path": display_path(yaml_path, logs_root),
         "yaml_created_at": yaml_created_at,
         "updated_at": format_timestamp(updated_at),
+        "suggested_measurement_role": infer_measurement_role(
+            yaml_summary.get("dut_product"),
+            measurement_dir.name,
+        ),
         **yaml_summary,
         "global_peak_dbm": round(global_peak_dbm, 6),
         "rows": rows,
@@ -1852,6 +1997,7 @@ class WOYMRequestHandler(SimpleHTTPRequestHandler):
     def handle_write_docx_summary(self) -> None:
         query = parse_qs(urlsplit(self.path).query)
         measurement_id = query.get("measurement_id", [""])[0]
+        measurement_role = query.get("measurement_role", [""])[0]
 
         if not measurement_id:
             self.send_json(
@@ -1861,7 +2007,7 @@ class WOYMRequestHandler(SimpleHTTPRequestHandler):
             return
 
         try:
-            output_path = write_analyser_docx_summary(self.logs_root, measurement_id)
+            output_path = write_analyser_docx_summary(self.logs_root, measurement_id, measurement_role)
         except FileNotFoundError as exc:
             self.send_json({"error": str(exc)}, status=HTTPStatus.NOT_FOUND)
             return

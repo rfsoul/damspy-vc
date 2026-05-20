@@ -23,6 +23,11 @@ const PLOT_FOLDER_SCOPES = {
   BEST: "best",
   LOGS: "logs"
 };
+const MEASUREMENT_ROLE_MODES = {
+  AUTO: "auto",
+  DUT: "dut",
+  BASELINE: "baseline"
+};
 const DEFAULT_PLOT_MIN_DB = -25;
 const E_OVER_EMAX_DB_GUIDES = [-20, -10, -6, -3];
 const FIXED_CHANNEL_COLORS = new Map([
@@ -81,6 +86,8 @@ const analyserElements = {
   plotGridContainer: document.getElementById("plotGridContainer"),
   plotModeDescription: document.getElementById("plotModeDescription"),
   plotFolderScopeSelect: document.getElementById("plotFolderScopeSelect"),
+  deviceRoleSelect: document.getElementById("deviceRoleSelect"),
+  deviceRoleHint: document.getElementById("deviceRoleHint"),
   plotMinimumDbInput: document.getElementById("plotMinimumDbInput"),
   differenceOverlayButton: document.getElementById("differenceOverlayButton"),
   livePlotRefreshButton: document.getElementById("livePlotRefreshButton"),
@@ -104,6 +111,7 @@ const analyserState = {
   dataset: null,
   plotDisplayMode: PLOT_DISPLAY_MODES.E_OVER_EMAX,
   plotFolderScope: PLOT_FOLDER_SCOPES.BEST,
+  measurementRoleMode: MEASUREMENT_ROLE_MODES.AUTO,
   plotMinimumDb: DEFAULT_PLOT_MIN_DB,
   showDifferenceOverlay: false,
   pickerOpen: false,
@@ -265,9 +273,144 @@ function formatPowerLevel(value) {
   return String(value);
 }
 
+function normaliseAntennaRole(value) {
+  const text = String(value ?? "").trim().toLowerCase();
+
+  if (text.includes("secondary")) {
+    return "secondary";
+  }
+
+  if (text.includes("main") || text.includes("primary")) {
+    return "main";
+  }
+
+  return "";
+}
+
+function formatAntennaLabel(value) {
+  const antennaRole = normaliseAntennaRole(value);
+
+  if (antennaRole === "secondary") {
+    return "Secondary";
+  }
+
+  if (antennaRole === "main") {
+    return "Main";
+  }
+
+  return "";
+}
+
 function formatSeriesLabel(entry) {
+  const antennaLabel = formatAntennaLabel(entry.antenna);
   const powerLevel = formatPowerLevel(entry.power_level);
-  return powerLevel ? formatChannelLabel(entry.channel) + " " + powerLevel : formatChannelLabel(entry.channel);
+  return [antennaLabel, formatChannelLabel(entry.channel), powerLevel].filter(Boolean).join(" ");
+}
+
+function normaliseMeasurementRole(value) {
+  const text = String(value ?? "").trim().toLowerCase();
+
+  if (text === MEASUREMENT_ROLE_MODES.DUT) {
+    return MEASUREMENT_ROLE_MODES.DUT;
+  }
+
+  if (text === MEASUREMENT_ROLE_MODES.BASELINE) {
+    return MEASUREMENT_ROLE_MODES.BASELINE;
+  }
+
+  return "";
+}
+
+function inferMeasurementRole(data) {
+  if (data && typeof data.suggested_measurement_role === "string") {
+    const suggestedRole = normaliseMeasurementRole(data.suggested_measurement_role);
+    if (suggestedRole) {
+      return suggestedRole;
+    }
+  }
+
+  const combined = [
+    data && data.dut_product,
+    data && data.measurement_name
+  ]
+    .map((value) => String(value ?? "").trim().toLowerCase())
+    .join(" ");
+
+  if (combined.includes("wireless-pro") || combined.includes("wireless pro")) {
+    return MEASUREMENT_ROLE_MODES.BASELINE;
+  }
+
+  if (combined.includes("hendrix") || combined.includes("rxcc")) {
+    return MEASUREMENT_ROLE_MODES.DUT;
+  }
+
+  return MEASUREMENT_ROLE_MODES.DUT;
+}
+
+function resolveMeasurementRole(data = analyserState.dataset) {
+  const manualRole = normaliseMeasurementRole(analyserState.measurementRoleMode);
+  return manualRole || inferMeasurementRole(data);
+}
+
+function formatMeasurementRoleLabel(role) {
+  return role === MEASUREMENT_ROLE_MODES.BASELINE ? "Baseline" : "DUT";
+}
+
+function getSeriesLineStyleKey(entry, measurementRole) {
+  const antennaRole = normaliseAntennaRole(entry && entry.antenna);
+  const resolvedRole = normaliseMeasurementRole(measurementRole) || MEASUREMENT_ROLE_MODES.DUT;
+
+  if (resolvedRole === MEASUREMENT_ROLE_MODES.DUT) {
+    return antennaRole === "secondary" ? "dut-secondary" : "dut-main";
+  }
+
+  return antennaRole === "secondary" ? "baseline-secondary" : "baseline-main";
+}
+
+function getLineDashArray(lineStyleKey) {
+  if (lineStyleKey === "dut-secondary") {
+    return "14 8";
+  }
+
+  if (lineStyleKey === "baseline-main") {
+    return "2 8";
+  }
+
+  if (lineStyleKey === "baseline-secondary") {
+    return "2 8 14 8";
+  }
+
+  return "";
+}
+
+function getLineSwatchBackground(color, lineStyleKey) {
+  if (lineStyleKey === "dut-secondary") {
+    return `repeating-linear-gradient(90deg, ${color} 0 12px, transparent 12px 20px)`;
+  }
+
+  if (lineStyleKey === "baseline-main") {
+    return `repeating-linear-gradient(90deg, ${color} 0 3px, transparent 3px 10px)`;
+  }
+
+  if (lineStyleKey === "baseline-secondary") {
+    return `repeating-linear-gradient(90deg, ${color} 0 3px, transparent 3px 10px, ${color} 10px 22px, transparent 22px 30px)`;
+  }
+
+  return color;
+}
+
+function applyLineSwatchStyle(element, color, lineStyleKey) {
+  element.className = "swatch swatch-line";
+  element.style.background = getLineSwatchBackground(color, lineStyleKey);
+  element.style.backgroundImage = "";
+
+  if (lineStyleKey === "dut-main") {
+    element.style.background = color;
+    return;
+  }
+
+  element.style.background = "transparent";
+  element.style.backgroundImage = getLineSwatchBackground(color, lineStyleKey);
 }
 
 function inferSeriesLevel(entry) {
@@ -726,7 +869,11 @@ async function writeDocxSummary() {
   analyserElements.docxSummaryButton.textContent = "Creating DOCX...";
 
   try {
-    const data = await fetchJson("/api/results-analyser/write-docx-summary?measurement_id=" + encodeURIComponent(analyserState.selectedMeasurementId));
+    const params = new URLSearchParams({
+      measurement_id: analyserState.selectedMeasurementId,
+      measurement_role: resolveMeasurementRole()
+    });
+    const data = await fetchJson("/api/results-analyser/write-docx-summary?" + params.toString());
     const relativePath = data && data.relative_path ? String(data.relative_path) : "analyser_summary.docx";
     setBanner(analyserElements.banner, "success", "DOCX summary generated: " + relativePath);
   } catch (error) {
@@ -940,6 +1087,7 @@ function renderAnalyserEmpty(message) {
   analyserElements.measurementUpdatedAt.textContent = MISSING;
   analyserElements.testFolderList.replaceChildren();
   analyserElements.plotGridContainer.replaceChildren();
+  updateMeasurementRoleUi();
   updateDocxSummaryButton();
   updatePlotModeUi();
   updateDifferenceOverlayButton();
@@ -975,9 +1123,31 @@ function updatePlotControlsUi() {
     analyserElements.plotFolderScopeSelect.value = analyserState.plotFolderScope;
   }
 
+  if (analyserElements.deviceRoleSelect) {
+    analyserElements.deviceRoleSelect.value = analyserState.measurementRoleMode;
+  }
+
   if (analyserElements.plotMinimumDbInput) {
     analyserElements.plotMinimumDbInput.value = String(analyserState.plotMinimumDb);
   }
+}
+
+function updateMeasurementRoleUi() {
+  updatePlotControlsUi();
+
+  if (!analyserElements.deviceRoleHint) {
+    return;
+  }
+
+  if (!analyserState.dataset) {
+    analyserElements.deviceRoleHint.textContent = "Auto defaults DUT for Hendrix/RXCC and Baseline for Wireless Pro.";
+    return;
+  }
+
+  const resolvedRole = resolveMeasurementRole(analyserState.dataset);
+  analyserElements.deviceRoleHint.textContent = analyserState.measurementRoleMode === MEASUREMENT_ROLE_MODES.AUTO
+    ? "Auto -> " + formatMeasurementRoleLabel(resolvedRole) + " for this measurement."
+    : "Using " + formatMeasurementRoleLabel(resolvedRole) + " line styles.";
 }
 
 function updateLivePlotRefreshButton() {
@@ -1006,6 +1176,7 @@ function renderAnalyserData(data) {
   analyserElements.testFolderParentValue.textContent = data.measurement_name || MISSING;
   analyserElements.measurementUpdatedAt.textContent = "Updated " + formatLocalDateTime(data.updated_at);
 
+  updateMeasurementRoleUi();
   updatePlotModeUi();
   updateDifferenceOverlayButton();
   renderFolderList(data.folders);
@@ -1033,7 +1204,13 @@ function renderFolderList(folders) {
 
     const meta = document.createElement("span");
     meta.className = "folder-meta";
-    meta.textContent = [folder.orientation, folder.polarisation, formatChannelLabel(folder.channel), formatFrequency(folder.frequency_hz)]
+    meta.textContent = [
+      folder.orientation,
+      folder.polarisation,
+      formatAntennaLabel(folder.antenna),
+      formatChannelLabel(folder.channel),
+      formatFrequency(folder.frequency_hz)
+    ]
       .filter((value) => value && value !== MISSING)
       .join(" | ");
 
@@ -1046,6 +1223,20 @@ function naturalSortValue(value) {
   return String(value).replace(/(\d+)/g, (_, digits) => digits.padStart(12, "0"));
 }
 
+function antennaSortRank(value) {
+  const antennaRole = normaliseAntennaRole(value);
+
+  if (antennaRole === "main") {
+    return 0;
+  }
+
+  if (antennaRole === "secondary") {
+    return 1;
+  }
+
+  return 2;
+}
+
 function sortSeries(series) {
   return [...series].sort((left, right) => {
     const leftNumber = Number(left.channel);
@@ -1056,12 +1247,22 @@ function sortSeries(series) {
         return leftNumber - rightNumber;
       }
 
+      const antennaOrder = antennaSortRank(left.antenna) - antennaSortRank(right.antenna);
+      if (antennaOrder !== 0) {
+        return antennaOrder;
+      }
+
       return comparePowerLevels(left.power_level, right.power_level);
     }
 
     const channelOrder = naturalSortValue(left.channel ?? "").localeCompare(naturalSortValue(right.channel ?? ""));
     if (channelOrder !== 0) {
       return channelOrder;
+    }
+
+    const antennaOrder = antennaSortRank(left.antenna) - antennaSortRank(right.antenna);
+    if (antennaOrder !== 0) {
+      return antennaOrder;
     }
 
     return comparePowerLevels(left.power_level, right.power_level);
@@ -1181,7 +1382,8 @@ function buildDifferenceSeries(series) {
   const grouped = new Map();
 
   for (const entry of sortSeries(series)) {
-    const key = String(entry.channel ?? "");
+    const antennaRole = normaliseAntennaRole(entry.antenna) || "main";
+    const key = String(entry.channel ?? "") + "::" + antennaRole;
     const items = grouped.get(key) || [];
     items.push(entry);
     grouped.set(key, items);
@@ -1384,10 +1586,12 @@ function createPlotCard(plot, row, column, dataset, mode, orientationImageUrl = 
 
   const card = document.createElement("article");
   card.className = "plot-card";
+  const measurementRole = resolveMeasurementRole(dataset);
 
   const colorisedSeries = sortSeries(plot.series).map((entry, index) => ({
     ...entry,
-    color: getChannelColor(entry.channel, index)
+    color: getChannelColor(entry.channel, index),
+    lineStyleKey: getSeriesLineStyleKey(entry, measurementRole)
   }));
   const preparedPlot = prepareSeriesForPlot(colorisedSeries, dataset, mode, analyserState.showDifferenceOverlay);
   const svg = createPlotSvg(preparedPlot, row, column, mode);
@@ -1430,8 +1634,7 @@ function createPlotLegend(preparedPlot, mode) {
     item.className = "legend-item";
 
     const swatch = document.createElement("span");
-    swatch.className = "swatch";
-    swatch.style.background = entry.color;
+    applyLineSwatchStyle(swatch, entry.color, entry.lineStyleKey);
 
     const primary = document.createElement("div");
     primary.className = "legend-primary";
@@ -1460,12 +1663,7 @@ function createPlotLegend(preparedPlot, mode) {
     item.className = "legend-item";
 
     const swatch = document.createElement("span");
-    swatch.className = "swatch";
-    swatch.style.width = "0.95rem";
-    swatch.style.height = "0";
-    swatch.style.borderRadius = "0";
-    swatch.style.background = "transparent";
-    swatch.style.borderTop = "2px dashed " + entry.color;
+    applyLineSwatchStyle(swatch, entry.color, "dut-secondary");
 
     const primary = document.createElement("div");
     primary.className = "legend-primary";
@@ -1603,16 +1801,7 @@ function updatePlotReadout(readout, angle, rows, pinned, mode) {
     line.className = "plot-readout-row";
 
     const swatch = document.createElement("span");
-    swatch.className = "swatch";
-    if (row.dashed) {
-      swatch.style.width = "0.95rem";
-      swatch.style.height = "0";
-      swatch.style.borderRadius = "0";
-      swatch.style.background = "transparent";
-      swatch.style.borderTop = "2px dashed " + row.color;
-    } else {
-      swatch.style.background = row.color;
-    }
+    applyLineSwatchStyle(swatch, row.color, row.lineStyleKey);
 
     const text = document.createElement("span");
     text.textContent = row.text;
@@ -1789,7 +1978,8 @@ function createPlotSvg(preparedPlot, row, column, mode) {
       stroke: entry.color,
       "stroke-width": 2.8,
       "stroke-linecap": "round",
-      "stroke-linejoin": "round"
+      "stroke-linejoin": "round",
+      "stroke-dasharray": getLineDashArray(entry.lineStyleKey) || null
     }));
   }
 
@@ -1866,7 +2056,7 @@ function createPlotSvg(preparedPlot, row, column, mode) {
       markerLayer.append(marker);
       rows.push({
         color: entry.color,
-        dashed: false,
+        lineStyleKey: entry.lineStyleKey,
         text: mode === PLOT_DISPLAY_MODES.E_OVER_EMAX
           ? formatSeriesLabel(entry) + ": " + formatEOverEmax(point.e_over_emax) + " | " + formatDbm(point.rx_peak_dbm)
           : formatSeriesLabel(entry) + ": " + formatDb(point.normalised_db) + " | " + formatDbm(point.rx_peak_dbm)
@@ -1894,7 +2084,7 @@ function createPlotSvg(preparedPlot, row, column, mode) {
       markerLayer.append(marker);
       rows.push({
         color: entry.color,
-        dashed: true,
+        lineStyleKey: "dut-secondary",
         text: entry.label + ": " + formatSignedDb(point.delta_db) + " | rel " + formatSignedDb(point.normalised_delta_db)
       });
     }
@@ -1997,6 +2187,27 @@ function bindAnalyserControls() {
     });
   }
 
+  if (analyserElements.deviceRoleSelect) {
+    analyserElements.deviceRoleSelect.addEventListener("change", () => {
+      const nextRole = analyserElements.deviceRoleSelect.value === MEASUREMENT_ROLE_MODES.BASELINE
+        ? MEASUREMENT_ROLE_MODES.BASELINE
+        : analyserElements.deviceRoleSelect.value === MEASUREMENT_ROLE_MODES.DUT
+          ? MEASUREMENT_ROLE_MODES.DUT
+          : MEASUREMENT_ROLE_MODES.AUTO;
+
+      if (nextRole === analyserState.measurementRoleMode) {
+        return;
+      }
+
+      analyserState.measurementRoleMode = nextRole;
+      updateMeasurementRoleUi();
+
+      if (analyserState.dataset) {
+        renderPlotGrid(analyserState.dataset);
+      }
+    });
+  }
+
   if (analyserElements.plotMinimumDbInput) {
     analyserElements.plotMinimumDbInput.addEventListener("change", () => {
       analyserState.plotMinimumDb = normalisePlotMinimumDb(analyserElements.plotMinimumDbInput.value);
@@ -2068,7 +2279,7 @@ bindAnalyserControls();
 bindThemeControls();
 initialiseCollapsedAnalyserPanels();
 applyTheme(readStoredTheme());
-updatePlotControlsUi();
+updateMeasurementRoleUi();
 updatePlotModeUi();
 updateLivePlotRefreshButton();
 updateDocxSummaryButton();

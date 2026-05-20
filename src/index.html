@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>DAMSpy Visualiser</title>
-  <link rel="stylesheet" href="/src/styles.css?v=20260515c">
+  <link rel="stylesheet" href="/src/styles.css?v=20260520a">
 </head>
 <body>
   <main class="app-shell">
@@ -239,6 +239,14 @@
                 <option value="logs">DAMspy Logs</option>
               </select>
             </label>
+            <label class="plot-control-field" for="deviceRoleSelect">
+              <span>Device Role</span>
+              <select id="deviceRoleSelect" class="plot-control-select">
+                <option value="auto" selected>Auto</option>
+                <option value="dut">DUT</option>
+                <option value="baseline">Baseline</option>
+              </select>
+            </label>
             <label class="plot-control-field" for="plotMinimumDbInput">
               <span>Min dB</span>
               <input id="plotMinimumDbInput" class="plot-control-input" type="number" value="-25" step="1">
@@ -248,6 +256,7 @@
             <button id="differenceOverlayButton" class="button button-ghost button-small" type="button">Show Channel Delta</button>
             <button id="livePlotRefreshButton" class="button button-ghost button-small" type="button" aria-pressed="false">Live Plot Refresh Off</button>
           </div>
+          <p id="deviceRoleHint" class="plot-control-note">Auto defaults DUT for Hendrix/RXCC and Baseline for Wireless Pro.</p>
         </div>
 
         <div id="plotGridContainer" class="plot-grid-container">
@@ -257,6 +266,6 @@
     </section>
   </main>
 
-  <script src="/src/app.js?v=20260515a"></script>
+  <script src="/src/app.js?v=20260520a"></script>
 </body>
 </html>
