@@ -30,12 +30,14 @@ const MEASUREMENT_ROLE_MODES = {
 };
 const SIG_GEN_DEVICE_HENDRIX_TX = "hendrix_tx";
 const SIG_GEN_DEVICE_WIRELESS_PRO_RX = "wireless-pro-rx";
+const HENDRIX_GREEN = "#22c55e";
+const WIRELESS_PRO_GREEN = "#15803d";
 const DEFAULT_PLOT_MIN_DB = -25;
 const E_OVER_EMAX_DB_GUIDES = [-20, -10, -6, -3];
 const FIXED_CHANNEL_COLORS = new Map([
   ["0", "#ef4444"],
-  ["40", "#22c55e"],
-  ["50", "#22c55e"],
+  ["40", HENDRIX_GREEN],
+  ["50", HENDRIX_GREEN],
   ["80", "#3b82f6"]
 ]);
 
@@ -345,11 +347,19 @@ function formatAntennaLabel(value, entry = null) {
   return "";
 }
 
-function formatSeriesLabel(entry) {
+function formatSeriesMeasurementLabel(entry) {
   const measurementLabel = entry && entry.measurement_label ? String(entry.measurement_label).trim() : "";
+  return measurementLabel;
+}
+
+function formatSeriesLegendDetail(entry) {
   const antennaLabel = formatAntennaLabel(entry.antenna, entry);
   const powerLevel = formatPowerLevel(entry.power_level);
-  return [measurementLabel, antennaLabel, formatChannelLabel(entry.channel), powerLevel].filter(Boolean).join(" | ");
+  return [antennaLabel, formatChannelLabel(entry.channel), powerLevel].filter(Boolean).join(" | ");
+}
+
+function formatSeriesLabel(entry) {
+  return [formatSeriesMeasurementLabel(entry), formatSeriesLegendDetail(entry)].filter(Boolean).join(" | ");
 }
 
 function normaliseMeasurementRole(value) {
@@ -496,14 +506,23 @@ function applyLineSwatchStyle(element, color, lineStyleKey) {
 }
 
 function formatSeriesMetrics(entry, mode) {
-  const parts = [
+  const parts = [];
+
+  const legendDetail = formatSeriesLegendDetail(entry);
+  if (legendDetail) {
+    parts.push(legendDetail);
+  }
+
+  parts.push(
     mode === PLOT_DISPLAY_MODES.E_OVER_EMAX
       ? formatEOverEmax(entry.peak_e_over_emax)
-      : formatDbm(entry.peak_dbm),
+      : formatDbm(entry.peak_dbm)
+  );
+  parts.push(
     mode === PLOT_DISPLAY_MODES.E_OVER_EMAX
       ? formatDbm(entry.peak_dbm)
       : formatSignedDb(entry.peak_offset_db)
-  ];
+  );
 
   if (entry.eirp_dbm !== null && entry.eirp_dbm !== undefined) {
     parts.push("EIRP " + formatDbm(entry.eirp_dbm));
@@ -584,8 +603,14 @@ function formatPolarisationLabel(value) {
   return text;
 }
 
-function getChannelColor(channel, index) {
+function getChannelColor(channel, index, deviceType = "") {
   const key = channel === null || channel === undefined ? "" : String(channel).trim();
+  const normalisedDeviceType = normaliseSigGenDeviceType(deviceType);
+
+  if ((key === "40" || key === "50") && normalisedDeviceType === SIG_GEN_DEVICE_WIRELESS_PRO_RX) {
+    return WIRELESS_PRO_GREEN;
+  }
+
   return FIXED_CHANNEL_COLORS.get(key) || CHANNEL_COLORS[index % CHANNEL_COLORS.length];
 }
 
@@ -1927,7 +1952,7 @@ function createPlotCard(plot, row, column, dataset, mode, orientationImageUrl = 
 
   const colorisedSeries = sortSeries(plot.series).map((entry, index) => ({
     ...entry,
-    color: getChannelColor(entry.channel, index),
+    color: getChannelColor(entry.channel, index, entry.device_type),
     lineStyleKey: getSeriesLineStyleKey(entry, measurementRole)
   }));
   const preparedPlot = prepareSeriesForPlot(colorisedSeries, dataset, mode, analyserState.showDifferenceOverlay);
@@ -1978,7 +2003,7 @@ function createPlotLegend(preparedPlot, mode) {
 
     const primary = document.createElement("div");
     primary.className = "legend-primary";
-    primary.textContent = formatSeriesLabel(entry);
+    primary.textContent = formatSeriesMeasurementLabel(entry);
 
     const secondary = document.createElement("div");
     secondary.className = "legend-secondary";

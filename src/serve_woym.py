@@ -37,6 +37,8 @@ BEST_FOLDER_NAME = "_best"
 ANALYSER_TESTER_NAME = "Alistair Morgan"
 SIG_GEN_DEVICE_HENDRIX_TX = "hendrix_tx"
 SIG_GEN_DEVICE_WIRELESS_PRO_RX = "wireless-pro-rx"
+HENDRIX_GREEN = "#22c55e"
+WIRELESS_PRO_GREEN = "#15803d"
 CHANNEL_COLORS = [
     "#66d7ff",
     "#ffb266",
@@ -49,8 +51,8 @@ CHANNEL_COLORS = [
 ]
 FIXED_CHANNEL_COLORS = {
     "0": "#ef4444",
-    "40": "#22c55e",
-    "50": "#22c55e",
+    "40": HENDRIX_GREEN,
+    "50": HENDRIX_GREEN,
     "80": "#3b82f6",
 }
 MEASUREMENT_ROLE_DUT = "dut"
@@ -1649,8 +1651,13 @@ def format_series_label(entry: dict[str, Any]) -> str:
     return " | ".join(part for part in parts if part)
 
 
-def get_channel_color(channel: Any, index: int) -> str:
+def get_channel_color(channel: Any, index: int, device_type: Any = None) -> str:
     key = "" if channel is None else str(channel).strip()
+    normalised_device_type = normalise_sig_gen_device_type(device_type)
+
+    if key in {"40", "50"} and normalised_device_type == SIG_GEN_DEVICE_WIRELESS_PRO_RX:
+        return WIRELESS_PRO_GREEN
+
     return FIXED_CHANNEL_COLORS.get(key, CHANNEL_COLORS[index % len(CHANNEL_COLORS)])
 
 
@@ -1731,7 +1738,7 @@ def render_analyser_summary_plot(plot: dict[str, Any], output_path: Path, measur
 
     if plot_peak is not None:
         for index, entry in enumerate(series):
-            color = get_channel_color(entry.get("channel"), index)
+            color = get_channel_color(entry.get("channel"), index, entry.get("device_type"))
             pattern = series_line_pattern(entry.get("antenna"), entry.get("device_type"), measurement_role)
             points = []
             sorted_points = sorted(entry.get("points", []), key=lambda item: coerce_float(item.get("angle_deg")) or 0)
@@ -1753,7 +1760,7 @@ def render_analyser_summary_plot(plot: dict[str, Any], output_path: Path, measur
 
     legend_y = 672
     for index, entry in enumerate(series[:8]):
-        color = get_channel_color(entry.get("channel"), index)
+        color = get_channel_color(entry.get("channel"), index, entry.get("device_type"))
         pattern = series_line_pattern(entry.get("antenna"), entry.get("device_type"), measurement_role)
         row_y = legend_y + index * 24
         draw_patterned_polyline(
