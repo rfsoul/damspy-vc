@@ -1606,7 +1606,10 @@ def draw_text_centered(draw: ImageDraw.ImageDraw, position: tuple[float, float],
 
 def render_analyser_summary_plot(plot: dict[str, Any], output_path: Path, measurement_role: str) -> None:
     if Image is None or ImageDraw is None or ImageFont is None:
-        raise RuntimeError("Pillow is required to render analyser summary plots")
+        raise RuntimeError(
+            "Pillow is required to render analyser summary plots. "
+            f"The current server interpreter is: {sys.executable}"
+        )
 
     width = 1000
     height = 820
