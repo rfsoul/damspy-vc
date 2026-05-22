@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>DAMSpy Visualiser</title>
-  <link rel="stylesheet" href="/src/styles.css?v=20260520a">
+  <link rel="stylesheet" href="/src/styles.css?v=20260520b">
 </head>
 <body>
   <main class="app-shell">
@@ -130,6 +130,7 @@
         <div class="hero-actions">
           <button class="button button-secondary" data-route="/">Back To Current Measurement</button>
           <button id="yamlPickerButton" class="button button-primary">Choose 1_meas_azimuth.yaml</button>
+          <button id="combinedSummaryModeButton" class="button button-ghost" type="button" aria-pressed="false">Combined Summary Off</button>
           <button id="docxSummaryButton" class="button button-ghost" type="button">Create DOCX Summary</button>
           <button id="summaryCsvButton" class="button button-ghost" type="button">Generate Summary CSV</button>
         </div>
@@ -204,8 +205,12 @@
       <section id="yamlPickerPanel" class="panel yaml-picker-panel" hidden>
         <div class="picker-header">
           <h2 class="picker-title">Discovered YAML Files</h2>
-          <button id="yamlRefreshButton" class="button button-ghost button-small" type="button">Refresh List</button>
+          <div class="picker-actions">
+            <button id="yamlApplyButton" class="button button-primary button-small" type="button" hidden>Plot Selected</button>
+            <button id="yamlRefreshButton" class="button button-ghost button-small" type="button">Refresh List</button>
+          </div>
         </div>
+        <p id="yamlPickerModeNote" class="picker-note">Single summary mode loads one YAML at a time.</p>
         <div id="yamlOptions" class="yaml-options"></div>
       </section>
 
@@ -266,6 +271,6 @@
     </section>
   </main>
 
-  <script src="/src/app.js?v=20260520b"></script>
+  <script src="/src/app.js?v=20260520c"></script>
 </body>
 </html>

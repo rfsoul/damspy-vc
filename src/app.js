@@ -67,9 +67,12 @@ const analyserElements = {
   measurementDetailsPanel: document.getElementById("measurementDetailsPanel"),
   testFolderPanel: document.getElementById("testFolderPanel"),
   yamlPickerButton: document.getElementById("yamlPickerButton"),
+  combinedSummaryModeButton: document.getElementById("combinedSummaryModeButton"),
   docxSummaryButton: document.getElementById("docxSummaryButton"),
   summaryCsvButton: document.getElementById("summaryCsvButton"),
   yamlRefreshButton: document.getElementById("yamlRefreshButton"),
+  yamlApplyButton: document.getElementById("yamlApplyButton"),
+  yamlPickerModeNote: document.getElementById("yamlPickerModeNote"),
   yamlPickerPanel: document.getElementById("yamlPickerPanel"),
   yamlOptions: document.getElementById("yamlOptions"),
   selectedYamlPath: document.getElementById("selectedYamlPath"),
@@ -108,6 +111,8 @@ const analyserState = {
   measurements: [],
   defaultMeasurementId: "",
   selectedMeasurementId: "",
+  selectedMeasurementIds: [],
+  combinedSummaryMode: false,
   dataset: null,
   plotDisplayMode: PLOT_DISPLAY_MODES.E_OVER_EMAX,
   plotFolderScope: PLOT_FOLDER_SCOPES.BEST,
@@ -302,9 +307,10 @@ function formatAntennaLabel(value) {
 }
 
 function formatSeriesLabel(entry) {
+  const measurementLabel = entry && entry.measurement_label ? String(entry.measurement_label).trim() : "";
   const antennaLabel = formatAntennaLabel(entry.antenna);
   const powerLevel = formatPowerLevel(entry.power_level);
-  return [antennaLabel, formatChannelLabel(entry.channel), powerLevel].filter(Boolean).join(" ");
+  return [measurementLabel, antennaLabel, formatChannelLabel(entry.channel), powerLevel].filter(Boolean).join(" | ");
 }
 
 function normaliseMeasurementRole(value) {
@@ -354,6 +360,34 @@ function resolveMeasurementRole(data = analyserState.dataset) {
 
 function formatMeasurementRoleLabel(role) {
   return role === MEASUREMENT_ROLE_MODES.BASELINE ? "Baseline" : "DUT";
+}
+
+function getActiveMeasurementIds() {
+  if (analyserState.combinedSummaryMode) {
+    return analyserState.selectedMeasurementIds.filter(Boolean);
+  }
+
+  return analyserState.selectedMeasurementId ? [analyserState.selectedMeasurementId] : [];
+}
+
+function isMeasurementSelected(measurementId) {
+  return analyserState.combinedSummaryMode
+    ? analyserState.selectedMeasurementIds.includes(measurementId)
+    : analyserState.selectedMeasurementId === measurementId;
+}
+
+function setSelectedMeasurementIds(measurementIds) {
+  const uniqueIds = [];
+
+  for (const measurementId of measurementIds) {
+    const text = String(measurementId ?? "").trim();
+    if (!text || uniqueIds.includes(text)) {
+      continue;
+    }
+    uniqueIds.push(text);
+  }
+
+  analyserState.selectedMeasurementIds = uniqueIds;
 }
 
 function getSeriesLineStyleKey(entry, measurementRole) {
@@ -540,6 +574,11 @@ function compareSeriesLevels(leftEntry, rightEntry) {
     return powerOrder;
   }
 
+  const measurementOrder = naturalSortValue(leftEntry.source_measurement_id ?? "").localeCompare(naturalSortValue(rightEntry.source_measurement_id ?? ""));
+  if (measurementOrder !== 0) {
+    return measurementOrder;
+  }
+
   return naturalSortValue(leftEntry.folder_name ?? "").localeCompare(naturalSortValue(rightEntry.folder_name ?? ""));
 }
 
@@ -582,6 +621,10 @@ function buildMeasurementStatusSummary(measurement) {
 }
 
 function buildAnalyserTitle(data) {
+  if (data && data.combined) {
+    return "Combined Antenna Pattern Summary";
+  }
+
   const product = data && data.dut_product !== null && data.dut_product !== undefined
     ? String(data.dut_product).trim()
     : "";
@@ -590,6 +633,23 @@ function buildAnalyserTitle(data) {
 }
 
 function buildAnalyserSubtitleRows(data) {
+  if (data && data.combined) {
+    return [
+      {
+        left: "Selected YAMLs: " + formatYamlSummaryValue(data.selection_count),
+        right: "Newest selection: " + formatLocalDate(data.yaml_created_at)
+      },
+      {
+        left: "DUT_hardware_config: " + formatYamlSummaryValue(data.dut_hardware_config),
+        right: "Tester: " + ANALYSER_TESTER_NAME
+      },
+      {
+        left: "tx_mode: " + formatYamlSummaryValue(data.tx_mode),
+        right: "Product: " + formatYamlSummaryValue(data.dut_product)
+      }
+    ];
+  }
+
   return [
     {
       left: "DUT_hardware_config: " + formatYamlSummaryValue(data.dut_hardware_config),
@@ -628,6 +688,7 @@ function renderAnalyserSubtitleRows(data) {
 
 function buildTestFolderSummary(data) {
   const folders = Array.isArray(data.folders) ? data.folders : [];
+  const yamlCount = Number(data && data.selection_count);
   const channelCount = new Set(
     folders
       .map((folder) => folder && folder.channel)
@@ -635,7 +696,8 @@ function buildTestFolderSummary(data) {
       .map((channel) => String(channel).trim())
   ).size;
 
-  return "Folders/tests = " + String(folders.length)
+  return (Number.isFinite(yamlCount) && yamlCount > 1 ? "YAMLs = " + String(yamlCount) + "  " : "")
+    + "Folders/tests = " + String(folders.length)
     + "  " + String(Array.isArray(data.rows) ? data.rows.length : 0) + " Pol"
     + "  " + String(Array.isArray(data.columns) ? data.columns.length : 0) + " Ori"
     + "  " + String(channelCount) + " ch";
@@ -877,30 +939,57 @@ async function writeDocxSummary() {
     return;
   }
 
-  if (!analyserState.selectedMeasurementId) {
-    setBanner(analyserElements.banner, "warning", "Select a measurement before creating a DOCX summary.");
+  const measurementIds = getActiveMeasurementIds();
+
+  if (!measurementIds.length) {
+    setBanner(
+      analyserElements.banner,
+      "warning",
+      analyserState.combinedSummaryMode
+        ? "Select one or more measurements before creating a combined summary."
+        : "Select a measurement before creating a DOCX summary."
+    );
     return;
   }
 
   analyserState.docxSummaryRequestInFlight = true;
   analyserElements.docxSummaryButton.disabled = true;
-  analyserElements.docxSummaryButton.textContent = "Creating DOCX...";
+  analyserElements.docxSummaryButton.textContent = analyserState.combinedSummaryMode
+    ? "Creating Combined DOCX..."
+    : "Creating DOCX...";
 
   try {
-    const params = new URLSearchParams({
-      measurement_id: analyserState.selectedMeasurementId,
-      measurement_role: resolveMeasurementRole()
-    });
-    const data = await fetchJson("/api/results-analyser/write-docx-summary?" + params.toString());
-    const relativePath = data && data.relative_path ? String(data.relative_path) : "analyser_summary.docx";
-    setBanner(analyserElements.banner, "success", "DOCX summary generated: " + relativePath);
+    const params = new URLSearchParams();
+    for (const measurementId of measurementIds) {
+      params.append("measurement_id", measurementId);
+    }
+    params.set("measurement_role", resolveMeasurementRole());
+
+    const endpoint = analyserState.combinedSummaryMode
+      ? "/api/results-analyser/write-combined-docx-summary?"
+      : "/api/results-analyser/write-docx-summary?";
+    const data = await fetchJson(endpoint + params.toString());
+    const relativePath = data && data.relative_path
+      ? String(data.relative_path)
+      : analyserState.combinedSummaryMode
+        ? "combined_summary.docx"
+        : "analyser_summary.docx";
+    setBanner(
+      analyserElements.banner,
+      "success",
+      (analyserState.combinedSummaryMode ? "Combined DOCX summary generated: " : "DOCX summary generated: ") + relativePath
+    );
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";
-    setBanner(analyserElements.banner, "error", "Unable to create DOCX summary: " + message);
+    setBanner(
+      analyserElements.banner,
+      "error",
+      (analyserState.combinedSummaryMode ? "Unable to create combined DOCX summary: " : "Unable to create DOCX summary: ") + message
+    );
   } finally {
     analyserState.docxSummaryRequestInFlight = false;
     analyserElements.docxSummaryButton.disabled = false;
-    analyserElements.docxSummaryButton.textContent = "Create DOCX Summary";
+    updateDocxSummaryButton();
   }
 }
 
@@ -909,7 +998,13 @@ function updateDocxSummaryButton() {
     return;
   }
 
-  analyserElements.docxSummaryButton.disabled = analyserState.docxSummaryRequestInFlight || !analyserState.selectedMeasurementId;
+  const hasSelection = getActiveMeasurementIds().length > 0;
+  analyserElements.docxSummaryButton.disabled = analyserState.docxSummaryRequestInFlight || !hasSelection;
+  analyserElements.docxSummaryButton.textContent = analyserState.docxSummaryRequestInFlight
+    ? analyserElements.docxSummaryButton.textContent
+    : analyserState.combinedSummaryMode
+      ? "Create Combined Summary DOCX"
+      : "Create DOCX Summary";
 }
 
 async function loadMeasurementList(options = {}) {
@@ -923,17 +1018,35 @@ async function loadMeasurementList(options = {}) {
     const data = await fetchJson("/api/results-analyser/yamls?scope=" + encodeURIComponent(analyserState.plotFolderScope));
     analyserState.measurements = Array.isArray(data.measurements) ? data.measurements : [];
     analyserState.defaultMeasurementId = data.default_measurement_id || "";
-    const currentExists = analyserState.measurements.some((measurement) => measurement.measurement_id === analyserState.selectedMeasurementId);
+    const validMeasurementIds = new Set(analyserState.measurements.map((measurement) => measurement.measurement_id));
 
-    if (!currentExists) {
-      analyserState.selectedMeasurementId = analyserState.defaultMeasurementId || "";
+    if (analyserState.combinedSummaryMode) {
+      setSelectedMeasurementIds(analyserState.selectedMeasurementIds.filter((measurementId) => validMeasurementIds.has(measurementId)));
+
+      if (!analyserState.selectedMeasurementIds.length && analyserState.defaultMeasurementId) {
+        setSelectedMeasurementIds([analyserState.defaultMeasurementId]);
+      }
+
+      analyserState.selectedMeasurementId = analyserState.selectedMeasurementIds[0] || "";
+    } else {
+      const currentExists = analyserState.measurements.some((measurement) => measurement.measurement_id === analyserState.selectedMeasurementId);
+
+      if (!currentExists) {
+        analyserState.selectedMeasurementId = analyserState.defaultMeasurementId || "";
+      }
+
+      setSelectedMeasurementIds(analyserState.selectedMeasurementId ? [analyserState.selectedMeasurementId] : []);
     }
 
     renderYamlPicker();
     updateDocxSummaryButton();
 
-    if (options.autoLoad && analyserState.selectedMeasurementId) {
-      await loadMeasurementDataset(analyserState.selectedMeasurementId);
+    if (options.autoLoad && getActiveMeasurementIds().length) {
+      if (analyserState.combinedSummaryMode) {
+        await loadCombinedMeasurementDataset(getActiveMeasurementIds());
+      } else {
+        await loadMeasurementDataset(analyserState.selectedMeasurementId);
+      }
     } else if (!analyserState.measurements.length) {
       renderAnalyserEmpty("No 1_meas_azimuth results were found under DAMspy-core.");
     }
@@ -960,6 +1073,7 @@ async function loadMeasurementDataset(measurementId, options = {}) {
 
   const shouldShowLoadingState = !background || !analyserState.dataset || analyserState.selectedMeasurementId !== measurementId;
   analyserState.selectedMeasurementId = measurementId;
+  setSelectedMeasurementIds([measurementId]);
   analyserState.dataRequestInFlight = true;
   const requestId = ++analyserState.dataRequestSerial;
 
@@ -998,14 +1112,66 @@ async function loadMeasurementDataset(measurementId, options = {}) {
   }
 }
 
+async function loadCombinedMeasurementDataset(measurementIds, options = {}) {
+  const selectedIds = measurementIds.filter(Boolean);
+
+  if (!selectedIds.length) {
+    renderAnalyserEmpty("Select one or more measurements to view the combined summary.");
+    return;
+  }
+
+  if (analyserState.dataRequestInFlight) {
+    return;
+  }
+
+  analyserState.selectedMeasurementId = selectedIds[0] || "";
+  setSelectedMeasurementIds(selectedIds);
+  analyserState.dataRequestInFlight = true;
+  const requestId = ++analyserState.dataRequestSerial;
+
+  analyserElements.title.textContent = ANALYSER_DEFAULT_TITLE;
+  analyserElements.subtitle.textContent = "Loading " + String(selectedIds.length) + " selected measurements...";
+
+  try {
+    const params = new URLSearchParams();
+    for (const measurementId of selectedIds) {
+      params.append("measurement_id", measurementId);
+    }
+    const data = await fetchJson("/api/results-analyser/combined-data?" + params.toString());
+
+    if (requestId !== analyserState.dataRequestSerial) {
+      return;
+    }
+
+    analyserState.dataset = data;
+    clearBanner(analyserElements.banner);
+    renderAnalyserData(data);
+    updateDocxSummaryButton();
+  } catch (error) {
+    if (requestId !== analyserState.dataRequestSerial) {
+      return;
+    }
+
+    const message = error instanceof Error ? error.message : "Unknown error";
+    setBanner(analyserElements.banner, "error", "Unable to load combined analyser data: " + message);
+    renderAnalyserEmpty("The selected combined measurements could not be parsed.");
+  } finally {
+    analyserState.dataRequestInFlight = false;
+  }
+}
+
 async function ensureAnalyserReady() {
   if (!analyserState.measurements.length) {
     await loadMeasurementList({ autoLoad: true });
     return;
   }
 
-  if (!analyserState.dataset && analyserState.selectedMeasurementId) {
-    await loadMeasurementDataset(analyserState.selectedMeasurementId);
+  if (!analyserState.dataset && getActiveMeasurementIds().length) {
+    if (analyserState.combinedSummaryMode) {
+      await loadCombinedMeasurementDataset(getActiveMeasurementIds());
+    } else {
+      await loadMeasurementDataset(analyserState.selectedMeasurementId);
+    }
   }
 }
 
@@ -1018,7 +1184,7 @@ async function refreshAnalyserDataIfLive() {
     return;
   }
 
-  if (!analyserState.selectedMeasurementId) {
+  if (!analyserState.selectedMeasurementId || analyserState.combinedSummaryMode) {
     return;
   }
 
@@ -1028,6 +1194,7 @@ async function refreshAnalyserDataIfLive() {
 function renderYamlPicker() {
   analyserElements.yamlPickerPanel.hidden = !analyserState.pickerOpen;
   analyserElements.yamlOptions.replaceChildren();
+  updateCombinedSummaryModeUi();
 
   if (!analyserState.measurements.length) {
     const empty = document.createElement("div");
@@ -1041,7 +1208,7 @@ function renderYamlPicker() {
     const button = document.createElement("button");
     button.type = "button";
     button.className = "yaml-option";
-    button.classList.toggle("is-selected", measurement.measurement_id === analyserState.selectedMeasurementId);
+    button.classList.toggle("is-selected", isMeasurementSelected(measurement.measurement_id));
 
     const statuses = document.createElement("div");
     statuses.className = "yaml-option-statuses";
@@ -1060,10 +1227,42 @@ function renderYamlPicker() {
     meta.className = "yaml-option-meta";
     meta.textContent = buildMeasurementStatusSummary(measurement);
 
+    const indicator = document.createElement("span");
+    indicator.className = "yaml-option-meta";
+    indicator.textContent = analyserState.combinedSummaryMode && isMeasurementSelected(measurement.measurement_id)
+      ? "Selected"
+      : "";
+
+    if (analyserState.combinedSummaryMode) {
+      const checkbox = document.createElement("input");
+      checkbox.type = "checkbox";
+      checkbox.className = "yaml-option-check";
+      checkbox.checked = isMeasurementSelected(measurement.measurement_id);
+      checkbox.tabIndex = -1;
+      checkbox.setAttribute("aria-hidden", "true");
+      button.append(checkbox);
+    }
+
     copy.append(title, meta);
     statuses.append(quantityStatus, completenessStatus);
-    button.append(statuses, copy);
+    button.append(statuses, copy, indicator);
     button.addEventListener("click", async () => {
+      if (analyserState.combinedSummaryMode) {
+        const nextSelectedIds = new Set(analyserState.selectedMeasurementIds);
+
+        if (nextSelectedIds.has(measurement.measurement_id)) {
+          nextSelectedIds.delete(measurement.measurement_id);
+        } else {
+          nextSelectedIds.add(measurement.measurement_id);
+        }
+
+        setSelectedMeasurementIds(Array.from(nextSelectedIds));
+        analyserState.selectedMeasurementId = analyserState.selectedMeasurementIds[0] || "";
+        renderYamlPicker();
+        updateDocxSummaryButton();
+        return;
+      }
+
       analyserState.pickerOpen = false;
       renderYamlPicker();
       await loadMeasurementDataset(measurement.measurement_id);
@@ -1150,8 +1349,38 @@ function updatePlotControlsUi() {
   }
 }
 
+function updateCombinedSummaryModeUi() {
+  if (analyserElements.combinedSummaryModeButton) {
+    analyserElements.combinedSummaryModeButton.classList.toggle("is-active", analyserState.combinedSummaryMode);
+    analyserElements.combinedSummaryModeButton.textContent = analyserState.combinedSummaryMode
+      ? "Combined Summary On"
+      : "Combined Summary Off";
+    analyserElements.combinedSummaryModeButton.setAttribute("aria-pressed", String(analyserState.combinedSummaryMode));
+  }
+
+  if (analyserElements.yamlPickerButton) {
+    analyserElements.yamlPickerButton.textContent = analyserState.combinedSummaryMode
+      ? "Choose YAMLs"
+      : "Choose 1_meas_azimuth.yaml";
+  }
+
+  if (analyserElements.yamlApplyButton) {
+    analyserElements.yamlApplyButton.hidden = !analyserState.combinedSummaryMode;
+    analyserElements.yamlApplyButton.textContent = "Plot Selected (" + String(getActiveMeasurementIds().length) + ")";
+  }
+
+  if (analyserElements.yamlPickerModeNote) {
+    analyserElements.yamlPickerModeNote.textContent = analyserState.combinedSummaryMode
+      ? "Combined summary mode lets you select multiple YAMLs from this folder scope and overlay them together."
+      : "Single summary mode loads one YAML at a time.";
+  }
+
+  updateLivePlotRefreshButton();
+}
+
 function updateMeasurementRoleUi() {
   updatePlotControlsUi();
+  updateCombinedSummaryModeUi();
 
   if (!analyserElements.deviceRoleHint) {
     return;
@@ -1173,6 +1402,16 @@ function updateLivePlotRefreshButton() {
     return;
   }
 
+  if (analyserState.combinedSummaryMode) {
+    analyserState.liveRefreshEnabled = false;
+    analyserElements.livePlotRefreshButton.disabled = true;
+    analyserElements.livePlotRefreshButton.classList.remove("is-active");
+    analyserElements.livePlotRefreshButton.textContent = "Live Plot Refresh Off";
+    analyserElements.livePlotRefreshButton.setAttribute("aria-pressed", "false");
+    return;
+  }
+
+  analyserElements.livePlotRefreshButton.disabled = false;
   analyserElements.livePlotRefreshButton.classList.toggle("is-active", analyserState.liveRefreshEnabled);
   analyserElements.livePlotRefreshButton.textContent = analyserState.liveRefreshEnabled
     ? "Live Plot Refresh On"
@@ -1191,7 +1430,9 @@ function renderAnalyserData(data) {
   analyserElements.rxCableLossValue.textContent = formatDb(data.rx_cable_loss_db);
   analyserElements.rxDistanceValue.textContent = formatMeters(data.rx_dist_m);
   analyserElements.testFolderSummaryText.textContent = buildTestFolderSummary(data);
-  analyserElements.testFolderParentValue.textContent = data.measurement_name || MISSING;
+  analyserElements.testFolderParentValue.textContent = data.combined
+    ? "Combined selection of " + String(data.selection_count || 0) + " YAMLs"
+    : data.measurement_name || MISSING;
   analyserElements.measurementUpdatedAt.textContent = "Updated " + formatLocalDateTime(data.updated_at);
 
   updateMeasurementRoleUi();
@@ -1218,7 +1459,9 @@ function renderFolderList(folders) {
 
     const title = document.createElement("span");
     title.className = "folder-title";
-    title.textContent = folder.folder_name;
+    title.textContent = folder.source_measurement_name
+      ? String(folder.source_measurement_name) + " | " + folder.folder_name
+      : folder.folder_name;
 
     const meta = document.createElement("span");
     meta.className = "folder-meta";
@@ -1265,6 +1508,11 @@ function sortSeries(series) {
         return leftNumber - rightNumber;
       }
 
+      const measurementOrder = naturalSortValue(left.source_measurement_id ?? "").localeCompare(naturalSortValue(right.source_measurement_id ?? ""));
+      if (measurementOrder !== 0) {
+        return measurementOrder;
+      }
+
       const antennaOrder = antennaSortRank(left.antenna) - antennaSortRank(right.antenna);
       if (antennaOrder !== 0) {
         return antennaOrder;
@@ -1276,6 +1524,11 @@ function sortSeries(series) {
     const channelOrder = naturalSortValue(left.channel ?? "").localeCompare(naturalSortValue(right.channel ?? ""));
     if (channelOrder !== 0) {
       return channelOrder;
+    }
+
+    const measurementOrder = naturalSortValue(left.source_measurement_id ?? "").localeCompare(naturalSortValue(right.source_measurement_id ?? ""));
+    if (measurementOrder !== 0) {
+      return measurementOrder;
     }
 
     const antennaOrder = antennaSortRank(left.antenna) - antennaSortRank(right.antenna);
@@ -1401,7 +1654,7 @@ function buildDifferenceSeries(series) {
 
   for (const entry of sortSeries(series)) {
     const antennaRole = normaliseAntennaRole(entry.antenna) || "main";
-    const key = String(entry.channel ?? "") + "::" + antennaRole;
+    const key = String(entry.source_measurement_id ?? "") + "::" + String(entry.channel ?? "") + "::" + antennaRole;
     const items = grouped.get(key) || [];
     items.push(entry);
     grouped.set(key, items);
@@ -2156,10 +2409,65 @@ function bindAnalyserControls() {
     }
   });
 
+  if (analyserElements.combinedSummaryModeButton) {
+    analyserElements.combinedSummaryModeButton.addEventListener("click", async () => {
+      const previousSingleSelection = analyserState.selectedMeasurementId;
+      const previousCombinedSelections = [...analyserState.selectedMeasurementIds];
+      analyserState.combinedSummaryMode = !analyserState.combinedSummaryMode;
+
+      if (analyserState.combinedSummaryMode) {
+        setSelectedMeasurementIds(previousCombinedSelections.length ? previousCombinedSelections : [previousSingleSelection]);
+        if (!analyserState.selectedMeasurementIds.length && analyserState.defaultMeasurementId) {
+          setSelectedMeasurementIds([analyserState.defaultMeasurementId]);
+        }
+        analyserState.selectedMeasurementId = analyserState.selectedMeasurementIds[0] || analyserState.selectedMeasurementId;
+      } else {
+        analyserState.selectedMeasurementId = analyserState.selectedMeasurementIds[0] || analyserState.selectedMeasurementId || analyserState.defaultMeasurementId || "";
+        setSelectedMeasurementIds(analyserState.selectedMeasurementId ? [analyserState.selectedMeasurementId] : []);
+      }
+
+      updateMeasurementRoleUi();
+      renderYamlPicker();
+      updateDocxSummaryButton();
+
+      if (!analyserState.measurements.length) {
+        await loadMeasurementList({ autoLoad: true });
+        return;
+      }
+
+      if (analyserState.combinedSummaryMode) {
+        if (getActiveMeasurementIds().length) {
+          await loadCombinedMeasurementDataset(getActiveMeasurementIds());
+        } else {
+          renderAnalyserEmpty("Select one or more measurements to view the combined summary.");
+        }
+      } else if (analyserState.selectedMeasurementId) {
+        await loadMeasurementDataset(analyserState.selectedMeasurementId);
+      }
+    });
+  }
+
   analyserElements.yamlRefreshButton.addEventListener("click", async () => {
     await loadMeasurementList();
     renderYamlPicker();
   });
+
+  if (analyserElements.yamlApplyButton) {
+    analyserElements.yamlApplyButton.addEventListener("click", async () => {
+      if (!analyserState.combinedSummaryMode) {
+        return;
+      }
+
+      if (!getActiveMeasurementIds().length) {
+        setBanner(analyserElements.banner, "warning", "Select at least one YAML before plotting the combined summary.");
+        return;
+      }
+
+      analyserState.pickerOpen = false;
+      renderYamlPicker();
+      await loadCombinedMeasurementDataset(getActiveMeasurementIds());
+    });
+  }
 
   if (analyserElements.summaryCsvButton) {
     analyserElements.summaryCsvButton.addEventListener("click", async () => {
@@ -2199,6 +2507,7 @@ function bindAnalyserControls() {
       analyserState.measurements = [];
       analyserState.defaultMeasurementId = "";
       analyserState.selectedMeasurementId = "";
+      setSelectedMeasurementIds([]);
       analyserState.dataset = null;
       renderAnalyserEmpty("Loading measurements from " + (nextScope === PLOT_FOLDER_SCOPES.BEST ? "the best folder." : "DAMspy logs."));
       await loadMeasurementList({ autoLoad: true });

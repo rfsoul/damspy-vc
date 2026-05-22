@@ -806,6 +806,303 @@ def resolve_measurement(logs_root: Path, measurement_id: str) -> tuple[Path, Pat
     return measurement_dir, yaml_path, results_dir
 
 
+def dedupe_measurement_ids(measurement_ids: list[str]) -> list[str]:
+    seen: set[str] = set()
+    ordered: list[str] = []
+
+    for measurement_id in measurement_ids:
+        text = str(measurement_id or "").strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        ordered.append(text)
+
+    return ordered
+
+
+def parse_measurement_ids(query: dict[str, list[str]]) -> list[str]:
+    measurement_ids = dedupe_measurement_ids(query.get("measurement_id", []))
+
+    if measurement_ids:
+        return measurement_ids
+
+    joined_values = query.get("measurement_ids", [])
+    expanded: list[str] = []
+
+    for value in joined_values:
+        expanded.extend(part.strip() for part in str(value or "").split(","))
+
+    return dedupe_measurement_ids(expanded)
+
+
+def dataset_sort_timestamp(dataset: dict[str, Any]) -> float:
+    measurement_id = str(dataset.get("measurement_id") or "")
+    measurement_timestamp = measurement_name_timestamp(measurement_id)
+    if measurement_timestamp is not None:
+        return measurement_timestamp
+
+    updated_at = str(dataset.get("updated_at") or "")
+    try:
+        return datetime.fromisoformat(updated_at).timestamp()
+    except ValueError:
+        return 0.0
+
+
+def short_measurement_label(value: Any) -> str:
+    text = str(value or "").strip()
+    text = re.sub(r"^Antenna_Pattern_Measurement-", "", text)
+    return text if len(text) <= 52 else text[:49] + "..."
+
+
+def common_text_value(values: list[Any]) -> str | None:
+    texts = [str(value).strip() for value in values if value not in {None, ""}]
+    if not texts:
+        return None
+
+    unique = {text for text in texts}
+    if len(unique) == 1:
+        return texts[0]
+
+    return "Multiple"
+
+
+def common_numeric_value(values: list[Any]) -> float | None:
+    numerics = [coerce_float(value) for value in values]
+    valid = [value for value in numerics if value is not None]
+    if not valid:
+        return None
+
+    rounded = {round(value, 6) for value in valid}
+    if len(rounded) == 1:
+        return valid[0]
+
+    return None
+
+
+def load_combined_measurement_dataset(logs_root: Path, measurement_ids: list[str]) -> dict[str, Any]:
+    ordered_measurement_ids = dedupe_measurement_ids(measurement_ids)
+
+    if not ordered_measurement_ids:
+        raise ValueError("At least one measurement_id is required")
+
+    datasets = [load_measurement_dataset(logs_root, measurement_id) for measurement_id in ordered_measurement_ids]
+    datasets.sort(key=dataset_sort_timestamp)
+    anchor = datasets[-1]
+    source_measurements = []
+
+    for dataset in datasets:
+        source_measurements.append(
+            {
+                "measurement_id": dataset.get("measurement_id"),
+                "measurement_name": dataset.get("measurement_name"),
+                "yaml_relative_path": dataset.get("yaml_relative_path"),
+                "updated_at": dataset.get("updated_at"),
+                "folder_count": len(dataset.get("folders") or []),
+            }
+        )
+
+    all_series: list[dict[str, Any]] = []
+    rows: set[str] = set()
+    columns: set[str] = set()
+    orientation_images: dict[str, str] = {}
+    angle_min: float | None = None
+    angle_max: float | None = None
+    global_peak_dbm: float | None = None
+    updated_at = max(dataset_sort_timestamp(dataset) for dataset in datasets)
+
+    for dataset in datasets:
+        orientation_images.update(dataset.get("orientation_images") or {})
+        rows.update(str(row) for row in dataset.get("rows") or [])
+        columns.update(str(column) for column in dataset.get("columns") or [])
+
+        for plot in dataset.get("plots") or []:
+            for series in plot.get("series") or []:
+                points = []
+                for point in series.get("points") or []:
+                    rx_peak_dbm = coerce_float(point.get("rx_peak_dbm"))
+                    angle_deg = coerce_float(point.get("angle_deg"))
+                    if rx_peak_dbm is None or angle_deg is None:
+                        continue
+
+                    global_peak_dbm = rx_peak_dbm if global_peak_dbm is None else max(global_peak_dbm, rx_peak_dbm)
+                    angle_min = angle_deg if angle_min is None else min(angle_min, angle_deg)
+                    angle_max = angle_deg if angle_max is None else max(angle_max, angle_deg)
+                    points.append(
+                        {
+                            "angle_deg": angle_deg,
+                            "rx_peak_dbm": rx_peak_dbm,
+                        }
+                    )
+
+                if not points:
+                    continue
+
+                all_series.append(
+                    {
+                        "source_measurement_id": dataset.get("measurement_id"),
+                        "source_measurement_name": dataset.get("measurement_name"),
+                        "measurement_label": short_measurement_label(dataset.get("measurement_name")),
+                        "folder_name": series.get("folder_name"),
+                        "polarisation": plot.get("polarisation"),
+                        "orientation": plot.get("orientation"),
+                        "channel": series.get("channel"),
+                        "power_level": series.get("power_level"),
+                        "antenna": series.get("antenna"),
+                        "frequency_hz": series.get("frequency_hz"),
+                        "peak_dbm": coerce_float(series.get("peak_dbm")),
+                        "eirp_dbm": coerce_float(series.get("eirp_dbm")),
+                        "gain_dbd": coerce_float(series.get("gain_dbd")),
+                        "points": points,
+                    }
+                )
+
+    if global_peak_dbm is None or angle_min is None or angle_max is None:
+        return {
+            "measurement_id": anchor.get("measurement_id"),
+            "measurement_ids": ordered_measurement_ids,
+            "measurement_name": f"Combined selection ({len(datasets)} YAMLs)",
+            "yaml_relative_path": f"{len(datasets)} YAMLs selected",
+            "yaml_relative_paths": [dataset.get("yaml_relative_path") for dataset in datasets],
+            "yaml_created_at": anchor.get("yaml_created_at"),
+            "updated_at": anchor.get("updated_at"),
+            "combined": True,
+            "selection_count": len(datasets),
+            "source_measurements": source_measurements,
+            "suggested_measurement_role": anchor.get("suggested_measurement_role"),
+            "dut_product": common_text_value([dataset.get("dut_product") for dataset in datasets]) or anchor.get("dut_product"),
+            "dut_hardware_config": common_text_value([dataset.get("dut_hardware_config") for dataset in datasets]),
+            "dut_serial_number": common_text_value([dataset.get("dut_serial_number") for dataset in datasets]),
+            "tx_mode": common_text_value([dataset.get("tx_mode") for dataset in datasets]),
+            "rx_antenna_name": common_text_value([dataset.get("rx_antenna_name") for dataset in datasets]),
+            "rx_antenna_comment": common_text_value([dataset.get("rx_antenna_comment") for dataset in datasets]),
+            "rx_antenna_gain_dbi": common_numeric_value([dataset.get("rx_antenna_gain_dbi") for dataset in datasets]),
+            "rx_cable_loss_db": common_numeric_value([dataset.get("rx_cable_loss_db") for dataset in datasets]),
+            "rx_dist_m": common_numeric_value([dataset.get("rx_dist_m") for dataset in datasets]),
+            "global_peak_dbm": None,
+            "rows": [],
+            "columns": [],
+            "orientation_images": orientation_images,
+            "folders": [],
+            "plots": [],
+            "x_range": {"min": 0, "max": 0},
+            "y_range": {"min": -1, "max": 0},
+        }
+
+    grouped_plots: dict[tuple[str, str], dict[str, Any]] = {}
+    folder_records = []
+    normalised_min = 0.0
+
+    for series in all_series:
+        peak_dbm = coerce_float(series.get("peak_dbm"))
+        peak_offset_db = None if peak_dbm is None else peak_dbm - global_peak_dbm
+        plotted_points = []
+
+        for point in series["points"]:
+            normalised_db = point["rx_peak_dbm"] - global_peak_dbm
+            normalised_min = min(normalised_min, normalised_db)
+            plotted_points.append(
+                {
+                    "angle_deg": round(point["angle_deg"], 6),
+                    "rx_peak_dbm": round(point["rx_peak_dbm"], 6),
+                    "normalised_db": round(normalised_db, 6),
+                }
+            )
+
+        folder_records.append(
+            {
+                "source_measurement_id": series.get("source_measurement_id"),
+                "source_measurement_name": series.get("source_measurement_name"),
+                "measurement_label": series.get("measurement_label"),
+                "folder_name": series.get("folder_name"),
+                "orientation": series.get("orientation"),
+                "polarisation": series.get("polarisation"),
+                "channel": series.get("channel"),
+                "power_level": series.get("power_level"),
+                "antenna": series.get("antenna"),
+                "frequency_hz": series.get("frequency_hz"),
+                "peak_dbm": round(peak_dbm, 6) if peak_dbm is not None else None,
+                "eirp_dbm": round(series["eirp_dbm"], 6) if series.get("eirp_dbm") is not None else None,
+                "gain_dbd": round(series["gain_dbd"], 6) if series.get("gain_dbd") is not None else None,
+            }
+        )
+
+        group_key = (str(series.get("polarisation")), str(series.get("orientation")))
+        group = grouped_plots.setdefault(
+            group_key,
+            {
+                "polarisation": group_key[0],
+                "orientation": group_key[1],
+                "series": [],
+            },
+        )
+        group["series"].append(
+            {
+                "source_measurement_id": series.get("source_measurement_id"),
+                "source_measurement_name": series.get("source_measurement_name"),
+                "measurement_label": series.get("measurement_label"),
+                "folder_name": series.get("folder_name"),
+                "channel": series.get("channel"),
+                "power_level": series.get("power_level"),
+                "antenna": series.get("antenna"),
+                "frequency_hz": series.get("frequency_hz"),
+                "peak_dbm": round(peak_dbm, 6) if peak_dbm is not None else None,
+                "eirp_dbm": round(series["eirp_dbm"], 6) if series.get("eirp_dbm") is not None else None,
+                "gain_dbd": round(series["gain_dbd"], 6) if series.get("gain_dbd") is not None else None,
+                "peak_offset_db": round(peak_offset_db, 6) if peak_offset_db is not None else None,
+                "points": plotted_points,
+            }
+        )
+
+    y_floor = min(-1.0, math.floor(normalised_min / 5.0) * 5.0)
+    plot_records = [
+        grouped_plots[key]
+        for key in sorted(grouped_plots.keys(), key=lambda value: (polarisation_sort_key(value[0]), natural_sort_key(value[1])))
+    ]
+
+    return {
+        "measurement_id": anchor.get("measurement_id"),
+        "measurement_ids": ordered_measurement_ids,
+        "measurement_name": f"Combined selection ({len(datasets)} YAMLs)",
+        "yaml_relative_path": f"{len(datasets)} YAMLs selected",
+        "yaml_relative_paths": [dataset.get("yaml_relative_path") for dataset in datasets],
+        "yaml_created_at": anchor.get("yaml_created_at"),
+        "updated_at": anchor.get("updated_at"),
+        "combined": True,
+        "selection_count": len(datasets),
+        "source_measurements": source_measurements,
+        "suggested_measurement_role": anchor.get("suggested_measurement_role"),
+        "dut_product": common_text_value([dataset.get("dut_product") for dataset in datasets]) or "Combined Selection",
+        "dut_hardware_config": common_text_value([dataset.get("dut_hardware_config") for dataset in datasets]),
+        "dut_serial_number": common_text_value([dataset.get("dut_serial_number") for dataset in datasets]),
+        "tx_mode": common_text_value([dataset.get("tx_mode") for dataset in datasets]),
+        "rx_antenna_name": common_text_value([dataset.get("rx_antenna_name") for dataset in datasets]),
+        "rx_antenna_comment": common_text_value([dataset.get("rx_antenna_comment") for dataset in datasets]),
+        "rx_antenna_gain_dbi": common_numeric_value([dataset.get("rx_antenna_gain_dbi") for dataset in datasets]),
+        "rx_cable_loss_db": common_numeric_value([dataset.get("rx_cable_loss_db") for dataset in datasets]),
+        "rx_dist_m": common_numeric_value([dataset.get("rx_dist_m") for dataset in datasets]),
+        "global_peak_dbm": round(global_peak_dbm, 6),
+        "rows": sorted(rows, key=polarisation_sort_key),
+        "columns": sorted(columns, key=natural_sort_key),
+        "orientation_images": orientation_images,
+        "folders": sorted(
+            folder_records,
+            key=lambda item: (
+                natural_sort_key(item.get("source_measurement_name") or ""),
+                natural_sort_key(item.get("folder_name") or ""),
+            ),
+        ),
+        "plots": plot_records,
+        "x_range": {
+            "min": round(angle_min, 6),
+            "max": round(angle_max, 6),
+        },
+        "y_range": {
+            "min": round(y_floor, 6),
+            "max": 0.0,
+        },
+    }
+
+
 def find_first_csv(path: Path) -> Path | None:
     for entry in iter_directory(path):
         if entry.is_file() and entry.name.lower().endswith(".csv"):
@@ -1634,6 +1931,124 @@ def write_analyser_docx_summary(logs_root: Path, measurement_id: str, measuremen
     return output_path
 
 
+def latest_measurement_id(logs_root: Path, measurement_ids: list[str]) -> str:
+    ordered_measurement_ids = dedupe_measurement_ids(measurement_ids)
+    if not ordered_measurement_ids:
+        raise ValueError("At least one measurement_id is required")
+
+    manifests = []
+    for measurement_id in ordered_measurement_ids:
+        measurement_dir, _, _ = resolve_measurement(logs_root, measurement_id)
+        manifest = measurement_manifest(logs_root, measurement_dir)
+        if manifest is not None:
+            manifests.append(manifest)
+
+    if not manifests:
+        return ordered_measurement_ids[-1]
+
+    manifests.sort(key=lambda item: item.get("_sort_at", 0.0))
+    return str(manifests[-1]["measurement_id"])
+
+
+def combined_summary_filename() -> str:
+    return "combined_summary_" + datetime.now().strftime("%Y-%m-%d_%H-%M-%S") + ".docx"
+
+
+def write_combined_analyser_docx_summary(
+    logs_root: Path,
+    measurement_ids: list[str],
+    measurement_role: str | None = None,
+) -> Path:
+    ordered_measurement_ids = dedupe_measurement_ids(measurement_ids)
+    combined_dataset = load_combined_measurement_dataset(logs_root, ordered_measurement_ids)
+    output_measurement_id = latest_measurement_id(logs_root, ordered_measurement_ids)
+    output_measurement_dir, _, _ = resolve_measurement(logs_root, output_measurement_id)
+    output_path = output_measurement_dir / combined_summary_filename()
+    builder = DocxReportBuilder("DAMSpy Combined Results Summary")
+    resolved_measurement_role = normalise_measurement_role(measurement_role) or infer_measurement_role(
+        combined_dataset.get("dut_product"),
+        combined_dataset.get("measurement_name"),
+    )
+
+    builder.add_paragraph("DAMSpy Combined Results Summary", "Title")
+    builder.add_paragraph(
+        f"{len(ordered_measurement_ids)} YAMLs selected | Output in {output_measurement_dir.name}",
+        "Subtitle",
+    )
+    builder.add_table(
+        [
+            ["Field", "Value"],
+            ["Created at", datetime.now().strftime("%Y-%m-%d %H:%M:%S")],
+            ["Selection count", str(len(ordered_measurement_ids))],
+            ["Output folder", output_measurement_dir.name],
+            ["Combined global dB ref", report_dbm(combined_dataset.get("global_peak_dbm"))],
+            ["Device role", resolved_measurement_role.title()],
+        ],
+        [2500, 6860],
+    )
+
+    builder.add_heading("Selected YAMLs", 1)
+    selection_rows = [["Measurement", "YAML", "Updated", "Folders"]]
+    for measurement in combined_dataset.get("source_measurements") or []:
+        selection_rows.append(
+            [
+                report_value(measurement.get("measurement_name")),
+                report_value(measurement.get("yaml_relative_path")),
+                report_value(measurement.get("updated_at")),
+                report_value(measurement.get("folder_count")),
+            ]
+        )
+    builder.add_table(selection_rows, [3100, 3700, 1600, 960])
+
+    builder.add_heading("Combined Details", 1)
+    builder.add_table(
+        [
+            ["Field", "Value"],
+            ["DUT product", report_value(combined_dataset.get("dut_product"))],
+            ["DUT hardware config", report_value(combined_dataset.get("dut_hardware_config"))],
+            ["DUT serial number", report_value(combined_dataset.get("dut_serial_number"))],
+            ["TX mode", report_value(combined_dataset.get("tx_mode"))],
+            ["RX antenna", report_value(combined_dataset.get("rx_antenna_name"))],
+            ["RX antenna comment", report_value(combined_dataset.get("rx_antenna_comment"))],
+            ["RX antenna gain", report_value(combined_dataset.get("rx_antenna_gain_dbi"), " dBi")],
+            ["RX cable loss", report_db(combined_dataset.get("rx_cable_loss_db"))],
+            ["RX distance", report_value(combined_dataset.get("rx_dist_m"), " m")],
+            ["Folders with data", report_value(len(combined_dataset.get("folders") or []))],
+        ],
+        [2800, 6560],
+    )
+
+    builder.add_heading("Combined Plot Summary", 1)
+    plot_rows = [["Polarisation", "Orientation", "Series", "Peak", "Minimum"]]
+    for plot in combined_dataset.get("plots") or []:
+        values = [
+            point["rx_peak_dbm"]
+            for series in plot.get("series", [])
+            for point in series.get("points", [])
+            if coerce_float(point.get("rx_peak_dbm")) is not None
+        ]
+        plot_rows.append(
+            [
+                plot.get("polarisation"),
+                plot.get("orientation"),
+                len(plot.get("series") or []),
+                report_dbm(max(values) if values else None),
+                report_dbm(min(values) if values else None),
+            ]
+        )
+    builder.add_table(plot_rows, [1700, 2100, 1400, 2080, 2080])
+
+    builder.add_heading("Combined Summary Plots", 1)
+    with tempfile.TemporaryDirectory(prefix="damspy_combined_docx_") as temp_dir_name:
+        temp_output_dir = Path(temp_dir_name)
+        for caption, image_path in render_analyser_summary_plots(temp_output_dir, combined_dataset, resolved_measurement_role):
+            builder.add_image(image_path, f"Combined plot: {caption}", max_width_in=6.1)
+
+        builder.write(output_path)
+
+    return output_path
+
+
 def load_measurement_dataset(logs_root: Path, measurement_id: str) -> dict[str, Any]:
     measurement_dir, yaml_path, results_dir = resolve_measurement(logs_root, measurement_id)
     if not path_is_file(yaml_path):
@@ -1890,12 +2305,20 @@ class WOYMRequestHandler(SimpleHTTPRequestHandler):
             self.handle_measurement_data()
             return
 
+        if clean_path == "/api/results-analyser/combined-data":
+            self.handle_combined_measurement_data()
+            return
+
         if clean_path == "/api/results-analyser/write-summary-csv":
             self.handle_write_summary_csv()
             return
 
         if clean_path == "/api/results-analyser/write-docx-summary":
             self.handle_write_docx_summary()
+            return
+
+        if clean_path == "/api/results-analyser/write-combined-docx-summary":
+            self.handle_write_combined_docx_summary()
             return
 
         super().do_GET()
@@ -1982,6 +2405,31 @@ class WOYMRequestHandler(SimpleHTTPRequestHandler):
 
         self.send_json(dataset)
 
+    def handle_combined_measurement_data(self) -> None:
+        query = parse_qs(urlsplit(self.path).query)
+        measurement_ids = parse_measurement_ids(query)
+
+        if not measurement_ids:
+            self.send_json(
+                {"error": "At least one measurement_id query parameter is required"},
+                status=HTTPStatus.BAD_REQUEST,
+            )
+            return
+
+        try:
+            dataset = load_combined_measurement_dataset(self.logs_root, measurement_ids)
+        except FileNotFoundError as exc:
+            self.send_json({"error": str(exc)}, status=HTTPStatus.NOT_FOUND)
+            return
+        except ValueError as exc:
+            self.send_json({"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
+            return
+        except OSError as exc:
+            self.send_json({"error": str(exc)}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+            return
+
+        self.send_json(dataset)
+
     def handle_write_summary_csv(self) -> None:
         try:
             output_path = write_measurement_summary_csv(self.logs_root)
@@ -2017,6 +2465,49 @@ class WOYMRequestHandler(SimpleHTTPRequestHandler):
                         "Permission denied while writing the DOCX summary. "
                         "Close the existing analyser_summary.docx if it is open in Word or locked by Explorer preview. "
                         f"Path: {exc.filename or measurement_id}"
+                    ),
+                },
+                status=HTTPStatus.CONFLICT,
+            )
+            return
+        except FileNotFoundError as exc:
+            self.send_json({"error": str(exc)}, status=HTTPStatus.NOT_FOUND)
+            return
+        except ValueError as exc:
+            self.send_json({"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
+            return
+        except Exception as exc:
+            self.send_json({"error": str(exc)}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+            return
+
+        self.send_json(
+            {
+                "output_path": str(output_path),
+                "relative_path": display_path(output_path, self.logs_root),
+            }
+        )
+
+    def handle_write_combined_docx_summary(self) -> None:
+        query = parse_qs(urlsplit(self.path).query)
+        measurement_ids = parse_measurement_ids(query)
+        measurement_role = query.get("measurement_role", [""])[0]
+
+        if not measurement_ids:
+            self.send_json(
+                {"error": "At least one measurement_id query parameter is required"},
+                status=HTTPStatus.BAD_REQUEST,
+            )
+            return
+
+        try:
+            output_path = write_combined_analyser_docx_summary(self.logs_root, measurement_ids, measurement_role)
+        except PermissionError as exc:
+            self.send_json(
+                {
+                    "error": (
+                        "Permission denied while writing the combined DOCX summary. "
+                        "Close any existing combined_summary DOCX that may be open in Word or locked by Explorer preview. "
+                        f"Path: {exc.filename or ', '.join(measurement_ids)}"
                     ),
                 },
                 status=HTTPStatus.CONFLICT,
