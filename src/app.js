@@ -28,6 +28,8 @@ const MEASUREMENT_ROLE_MODES = {
   DUT: "dut",
   BASELINE: "baseline"
 };
+const SIG_GEN_DEVICE_HENDRIX_TX = "hendrix_tx";
+const SIG_GEN_DEVICE_WIRELESS_PRO_RX = "wireless-pro-rx";
 const DEFAULT_PLOT_MIN_DB = -25;
 const E_OVER_EMAX_DB_GUIDES = [-20, -10, -6, -3];
 const FIXED_CHANNEL_COLORS = new Map([
@@ -293,6 +295,28 @@ function normaliseAntennaRole(value) {
   return "";
 }
 
+function normaliseSigGenDeviceType(value) {
+  const text = String(value ?? "").trim().toLowerCase();
+
+  if (!text) {
+    return "";
+  }
+
+  const compact = text.replace(/[_\s]+/g, "-");
+  const hendrixCompact = SIG_GEN_DEVICE_HENDRIX_TX.replace(/_/g, "-");
+  const wirelessProCompact = SIG_GEN_DEVICE_WIRELESS_PRO_RX.replace(/_/g, "-");
+
+  if (compact === hendrixCompact || (compact.includes("hendrix") && compact.includes("tx"))) {
+    return SIG_GEN_DEVICE_HENDRIX_TX;
+  }
+
+  if (compact === wirelessProCompact || (compact.includes("wireless-pro") && compact.includes("rx"))) {
+    return SIG_GEN_DEVICE_WIRELESS_PRO_RX;
+  }
+
+  return text;
+}
+
 function formatAntennaLabel(value, entry = null) {
   if (entry && entry.antenna_label !== null && entry.antenna_label !== undefined && entry.antenna_label !== "") {
     return String(entry.antenna_label);
@@ -407,7 +431,16 @@ function setSelectedMeasurementIds(measurementIds) {
 
 function getSeriesLineStyleKey(entry, measurementRole) {
   const antennaRole = normaliseAntennaRole(entry && entry.antenna);
+  const deviceType = normaliseSigGenDeviceType(entry && entry.device_type);
   const resolvedRole = normaliseMeasurementRole(measurementRole) || MEASUREMENT_ROLE_MODES.DUT;
+
+  if (deviceType === SIG_GEN_DEVICE_HENDRIX_TX) {
+    return "dut-main";
+  }
+
+  if (deviceType === SIG_GEN_DEVICE_WIRELESS_PRO_RX) {
+    return antennaRole === "secondary" ? "baseline-secondary" : "baseline-main";
+  }
 
   if (resolvedRole === MEASUREMENT_ROLE_MODES.DUT) {
     return antennaRole === "secondary" ? "dut-secondary" : "dut-main";
@@ -1420,14 +1453,14 @@ function updateMeasurementRoleUi() {
   }
 
   if (!analyserState.dataset) {
-    analyserElements.deviceRoleHint.textContent = "Auto defaults DUT for Hendrix/RXCC and Baseline for Wireless Pro.";
+    analyserElements.deviceRoleHint.textContent = "Known sig_gen_1 device types override plot line styles: Hendrix Tx is always main; Wireless Pro RX uses dotted main and dash-dot secondary.";
     return;
   }
 
   const resolvedRole = resolveMeasurementRole(analyserState.dataset);
   analyserElements.deviceRoleHint.textContent = analyserState.measurementRoleMode === MEASUREMENT_ROLE_MODES.AUTO
-    ? "Auto -> " + formatMeasurementRoleLabel(resolvedRole) + " for this measurement."
-    : "Using " + formatMeasurementRoleLabel(resolvedRole) + " line styles.";
+    ? "Auto -> " + formatMeasurementRoleLabel(resolvedRole) + " for fallback line styles on measurements without a known sig_gen_1 device type."
+    : "Using " + formatMeasurementRoleLabel(resolvedRole) + " fallback line styles when sig_gen_1 device type does not force a pattern.";
 }
 
 function updateLivePlotRefreshButton() {
@@ -2046,6 +2079,9 @@ function buildPolarPathCommands(points, getPosition, wrapGapDegrees = 180) {
   const commands = [];
   let previousAngle = null;
   const gapThreshold = estimatePolarGapThreshold(points, wrapGapDegrees);
+  let firstAngle = null;
+  let firstPosition = null;
+  let lastAngle = null;
 
   for (const point of points) {
     const angle = Number(point.angle_deg);
@@ -2053,7 +2089,28 @@ function buildPolarPathCommands(points, getPosition, wrapGapDegrees = 180) {
     const startsNewSegment = previousAngle === null || (Number.isFinite(angle) && Number.isFinite(previousAngle) && Math.abs(angle - previousAngle) > gapThreshold);
 
     commands.push((startsNewSegment ? "M" : "L") + position.x.toFixed(2) + " " + position.y.toFixed(2));
+
+    if (firstPosition === null) {
+      firstAngle = angle;
+      firstPosition = position;
+    }
+
+    lastAngle = angle;
     previousAngle = angle;
+  }
+
+  const wrapGap = Number.isFinite(firstAngle) && Number.isFinite(lastAngle)
+    ? (360 - lastAngle) + firstAngle
+    : Number.NaN;
+  const shouldCloseWrap = firstPosition !== null
+    && Number.isFinite(firstAngle)
+    && Number.isFinite(lastAngle)
+    && Math.abs(firstAngle) <= 1e-6
+    && wrapGap > 0
+    && wrapGap <= 10;
+
+  if (shouldCloseWrap) {
+    commands.push("L" + firstPosition.x.toFixed(2) + " " + firstPosition.y.toFixed(2));
   }
 
   return commands;

@@ -35,6 +35,8 @@ MEASUREMENT_SCOPE_LOGS = "logs"
 MEASUREMENT_SCOPE_ALL = "all"
 BEST_FOLDER_NAME = "_best"
 ANALYSER_TESTER_NAME = "Alistair Morgan"
+SIG_GEN_DEVICE_HENDRIX_TX = "hendrix_tx"
+SIG_GEN_DEVICE_WIRELESS_PRO_RX = "wireless-pro-rx"
 CHANNEL_COLORS = [
     "#66d7ff",
     "#ffb266",
@@ -244,6 +246,24 @@ def infer_measurement_role(*values: Any) -> str:
     return MEASUREMENT_ROLE_DUT
 
 
+def normalise_sig_gen_device_type(value: Any) -> str | None:
+    text = str(value or "").strip().lower()
+    if not text:
+        return None
+
+    compact = text.replace("_", "-").replace(" ", "-")
+    hendrix_compact = SIG_GEN_DEVICE_HENDRIX_TX.replace("_", "-")
+    wireless_pro_compact = SIG_GEN_DEVICE_WIRELESS_PRO_RX.replace("_", "-")
+
+    if compact == hendrix_compact or ("hendrix" in compact and "tx" in compact):
+        return SIG_GEN_DEVICE_HENDRIX_TX
+
+    if compact == wireless_pro_compact or ("wireless-pro" in compact and "rx" in compact):
+        return SIG_GEN_DEVICE_WIRELESS_PRO_RX
+
+    return text
+
+
 def normalise_tx_antenna(value: Any, folder_name: str = "") -> str | None:
     text = str(value or "").strip().lower()
 
@@ -276,17 +296,54 @@ def format_antenna_label(value: Any) -> str:
     return ""
 
 
-def series_line_pattern(antenna: Any, measurement_role: str) -> tuple[int, ...] | None:
-    role = normalise_measurement_role(measurement_role) or MEASUREMENT_ROLE_DUT
+def resolve_series_line_style_key(antenna: Any, device_type: Any, measurement_role: str) -> str:
     antenna_role = normalise_tx_antenna(antenna)
+    normalised_device_type = normalise_sig_gen_device_type(device_type)
+
+    if normalised_device_type == SIG_GEN_DEVICE_HENDRIX_TX:
+        return "dut-main"
+
+    if normalised_device_type == SIG_GEN_DEVICE_WIRELESS_PRO_RX:
+        return "baseline-secondary" if antenna_role == "secondary" else "baseline-main"
+
+    role = normalise_measurement_role(measurement_role) or MEASUREMENT_ROLE_DUT
 
     if role == MEASUREMENT_ROLE_DUT:
-        return None if antenna_role != "secondary" else (18, 10)
+        return "dut-secondary" if antenna_role == "secondary" else "dut-main"
 
-    if antenna_role == "secondary":
+    return "baseline-secondary" if antenna_role == "secondary" else "baseline-main"
+
+
+def series_line_pattern(antenna: Any, device_type: Any, measurement_role: str) -> tuple[int, ...] | None:
+    line_style_key = resolve_series_line_style_key(antenna, device_type, measurement_role)
+
+    if line_style_key == "dut-secondary":
+        return (18, 10)
+
+    if line_style_key == "baseline-secondary":
         return (2, 10, 18, 10)
 
-    return (2, 10)
+    if line_style_key == "baseline-main":
+        return (2, 10)
+
+    return None
+
+
+def should_close_polar_wrap(points: list[dict[str, Any]], max_wrap_gap_degrees: float = 10.0) -> bool:
+    if len(points) < 2:
+        return False
+
+    first_angle = coerce_float(points[0].get("angle_deg"))
+    last_angle = coerce_float(points[-1].get("angle_deg"))
+
+    if first_angle is None or last_angle is None:
+        return False
+
+    if abs(first_angle) > 1e-6:
+        return False
+
+    wrap_gap = (360.0 - last_angle) + first_angle
+    return 0.0 < wrap_gap <= max_wrap_gap_degrees
 
 
 def interpolate_point(start: tuple[float, float], end: tuple[float, float], ratio: float) -> tuple[float, float]:
@@ -345,6 +402,7 @@ def read_yaml_summary_fields(path: Path) -> dict[str, Any]:
         "dut_product": None,
         "dut_hardware_config": None,
         "dut_serial_number": None,
+        "sig_gen_1_device_type": None,
         "tx_mode": None,
         "foldername_comment": None,
         "orientation_photo_location": None,
@@ -367,6 +425,7 @@ def read_yaml_summary_fields(path: Path) -> dict[str, Any]:
     }
     section_fields = {
         "sig_gen_1": {
+            "device_type": "sig_gen_1_device_type",
             "tx_mode": "tx_mode",
             "tx_cable_loss": "tx_cable_loss_db",
             "tx_power": "tx_power_dbm",
@@ -425,6 +484,7 @@ def read_yaml_summary_fields(path: Path) -> dict[str, Any]:
 
     field_values["tx_cable_loss_db"] = coerce_float(field_values["tx_cable_loss_db"])
     field_values["tx_power_dbm"] = coerce_float(field_values["tx_power_dbm"])
+    field_values["sig_gen_1_device_type"] = normalise_sig_gen_device_type(field_values["sig_gen_1_device_type"])
     field_values["rx_antenna_gain_dbi"] = coerce_float(field_values["rx_antenna_gain_dbi"])
     field_values["rx_cable_loss_db"] = coerce_float(field_values["rx_cable_loss_db"])
     field_values["rx_dist_m"] = coerce_float(field_values["rx_dist_m"])
@@ -955,6 +1015,7 @@ def load_combined_measurement_dataset(logs_root: Path, measurement_ids: list[str
                         "channel": series.get("channel"),
                         "power_level": series.get("power_level"),
                         "antenna": series.get("antenna"),
+                        "device_type": series.get("device_type"),
                         "frequency_hz": series.get("frequency_hz"),
                         "peak_dbm": coerce_float(series.get("peak_dbm")),
                         "eirp_dbm": coerce_float(series.get("eirp_dbm")),
@@ -1026,6 +1087,7 @@ def load_combined_measurement_dataset(logs_root: Path, measurement_ids: list[str
                 "channel": series.get("channel"),
                 "power_level": series.get("power_level"),
                 "antenna": series.get("antenna"),
+                "device_type": series.get("device_type"),
                 "frequency_hz": series.get("frequency_hz"),
                 "peak_dbm": round(peak_dbm, 6) if peak_dbm is not None else None,
                 "eirp_dbm": round(series["eirp_dbm"], 6) if series.get("eirp_dbm") is not None else None,
@@ -1051,6 +1113,7 @@ def load_combined_measurement_dataset(logs_root: Path, measurement_ids: list[str
                 "channel": series.get("channel"),
                 "power_level": series.get("power_level"),
                 "antenna": series.get("antenna"),
+                "device_type": series.get("device_type"),
                 "frequency_hz": series.get("frequency_hz"),
                 "peak_dbm": round(peak_dbm, 6) if peak_dbm is not None else None,
                 "eirp_dbm": round(series["eirp_dbm"], 6) if series.get("eirp_dbm") is not None else None,
@@ -1669,15 +1732,19 @@ def render_analyser_summary_plot(plot: dict[str, Any], output_path: Path, measur
     if plot_peak is not None:
         for index, entry in enumerate(series):
             color = get_channel_color(entry.get("channel"), index)
-            pattern = series_line_pattern(entry.get("antenna"), measurement_role)
+            pattern = series_line_pattern(entry.get("antenna"), entry.get("device_type"), measurement_role)
             points = []
-            for point in sorted(entry.get("points", []), key=lambda item: coerce_float(item.get("angle_deg")) or 0):
+            sorted_points = sorted(entry.get("points", []), key=lambda item: coerce_float(item.get("angle_deg")) or 0)
+            for point in sorted_points:
                 rx_peak = coerce_float(point.get("rx_peak_dbm"))
                 angle = coerce_float(point.get("angle_deg"))
                 if rx_peak is None or angle is None:
                     continue
                 ratio = db_to_amplitude_ratio(rx_peak - plot_peak)
                 points.append(polar_to_cartesian(center_x, center_y, radius, angle, ratio))
+
+            if should_close_polar_wrap(sorted_points) and points:
+                points.append(points[0])
 
             if len(points) >= 2:
                 draw_patterned_polyline(draw, points, hex_to_rgb(color), 5, pattern)
@@ -1687,7 +1754,7 @@ def render_analyser_summary_plot(plot: dict[str, Any], output_path: Path, measur
     legend_y = 672
     for index, entry in enumerate(series[:8]):
         color = get_channel_color(entry.get("channel"), index)
-        pattern = series_line_pattern(entry.get("antenna"), measurement_role)
+        pattern = series_line_pattern(entry.get("antenna"), entry.get("device_type"), measurement_role)
         row_y = legend_y + index * 24
         draw_patterned_polyline(
             draw,
@@ -2141,6 +2208,9 @@ def load_measurement_dataset(logs_root: Path, measurement_id: str) -> dict[str, 
             tx_power_dbm,
             tx_cable_loss_db,
         )
+        series_device_type = normalise_sig_gen_device_type(
+            series_info.get("device_type") or yaml_summary.get("sig_gen_1_device_type")
+        )
         tx_antenna = normalise_tx_antenna(series_info.get("antenna"), entry.name)
         product_text = " ".join(
             str(value or "")
@@ -2153,7 +2223,11 @@ def load_measurement_dataset(logs_root: Path, measurement_id: str) -> dict[str, 
                 entry.name,
             ]
         ).lower()
-        if "hendrix" in product_text or "nedrix" in product_text:
+        if series_device_type == SIG_GEN_DEVICE_HENDRIX_TX:
+            tx_antenna = "main"
+        elif series_device_type == SIG_GEN_DEVICE_WIRELESS_PRO_RX:
+            tx_antenna = "FPC ant id1" if tx_antenna == "secondary" else "PCB ant id0"
+        elif "hendrix" in product_text or "nedrix" in product_text:
             tx_antenna = "main"
         elif "wireless pro" in product_text or "wireless-pro" in product_text or "wireless_pro" in product_text:
             tx_antenna = "FPC ant id1" if tx_antenna == "secondary" else "PCB ant id0"
@@ -2164,6 +2238,7 @@ def load_measurement_dataset(logs_root: Path, measurement_id: str) -> dict[str, 
             "channel": series_info.get("channel"),
             "power_level": series_info.get("power_level"),
             "antenna": tx_antenna,
+            "device_type": series_device_type,
             "frequency_hz": frequency_hz,
             "peak_dbm": peak_dbm,
             "eirp_dbm": eirp_dbm,
@@ -2240,6 +2315,7 @@ def load_measurement_dataset(logs_root: Path, measurement_id: str) -> dict[str, 
                 "channel": folder["channel"],
                 "power_level": folder["power_level"],
                 "antenna": folder["antenna"],
+                "device_type": folder.get("device_type"),
                 "frequency_hz": folder["frequency_hz"],
                 "peak_dbm": round(folder["peak_dbm"], 6),
                 "eirp_dbm": round(folder["eirp_dbm"], 6) if folder["eirp_dbm"] is not None else None,
@@ -2258,6 +2334,7 @@ def load_measurement_dataset(logs_root: Path, measurement_id: str) -> dict[str, 
                     "channel": folder["channel"],
                     "power_level": folder["power_level"],
                     "antenna": folder["antenna"],
+                    "device_type": folder.get("device_type"),
                     "frequency_hz": folder["frequency_hz"],
                     "peak_dbm": round(folder["peak_dbm"], 6),
                     "eirp_dbm": round(folder["eirp_dbm"], 6) if folder["eirp_dbm"] is not None else None,
