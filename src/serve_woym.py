@@ -48,6 +48,7 @@ CHANNEL_COLORS = [
 FIXED_CHANNEL_COLORS = {
     "0": "#ef4444",
     "40": "#22c55e",
+    "50": "#22c55e",
     "80": "#3b82f6",
 }
 MEASUREMENT_ROLE_DUT = "dut"
@@ -246,21 +247,27 @@ def infer_measurement_role(*values: Any) -> str:
 def normalise_tx_antenna(value: Any, folder_name: str = "") -> str | None:
     text = str(value or "").strip().lower()
 
-    if "secondary" in text:
+    if text in {"1", "id1"} or "id1" in text or "fpc" in text or "secondary" in text:
         return "secondary"
-    if "main" in text or "primary" in text:
+    if text in {"0", "id0"} or "id0" in text or "pcb" in text or "main" in text or "primary" in text:
         return "main"
 
     folder_text = folder_name.lower()
-    if "ant-secondary" in folder_text:
+    if "ant-1" in folder_text or "ant-id1" in folder_text or "ant-fpc" in folder_text or "ant-secondary" in folder_text:
         return "secondary"
-    if "ant-main" in folder_text:
+    if "ant-0" in folder_text or "ant-id0" in folder_text or "ant-pcb" in folder_text or "ant-main" in folder_text:
         return "main"
 
     return None
 
 
 def format_antenna_label(value: Any) -> str:
+    text = str(value or "").strip().lower()
+    if "fpc" in text or "id1" in text:
+        return "FPC ant id1"
+    if "pcb" in text or "id0" in text:
+        return "PCB ant id0"
+
     antenna = normalise_tx_antenna(value)
     if antenna == "secondary":
         return "Secondary"
@@ -1256,13 +1263,14 @@ def normalise_dimension_values(value: Any) -> list[str]:
 
 
 def parse_subfolder_dimensions(subfolder_name: str) -> dict[str, str]:
-    values = {"ori": "", "pol": "", "ch": "", "pwr": "", "ctx": ""}
+    values = {"ori": "", "pol": "", "ch": "", "pwr": "", "ctx": "", "ant": ""}
     patterns = {
         "ori": r"(?:^|_)ori-([^_]+)",
         "pol": r"(?:^|_)pol-([^_]+)",
         "ch": r"(?:^|_)ch-([^_]+)",
         "pwr": r"(?:^|_)pwr-([^_]+)",
         "ctx": r"(?:^|_)ctx-([^_]+)",
+        "ant": r"(?:^|_)ant-([^_]+)",
     }
 
     for key, pattern in patterns.items():
@@ -1274,7 +1282,7 @@ def parse_subfolder_dimensions(subfolder_name: str) -> dict[str, str]:
 
 
 def collect_observed_dimension_values(subfolder_names: list[str]) -> dict[str, list[str]]:
-    collected = {"ori": [], "pol": [], "ch": [], "pwr": [], "ctx": []}
+    collected = {"ori": [], "pol": [], "ch": [], "pwr": [], "ctx": [], "ant": []}
 
     for subfolder_name in subfolder_names:
         parsed = parse_subfolder_dimensions(subfolder_name)
@@ -1575,7 +1583,7 @@ def format_series_label(entry: dict[str, Any]) -> str:
     antenna_label = format_antenna_label(entry.get("antenna"))
     power_level = format_power_level_label(entry.get("power_level"))
     parts = [antenna_label, format_channel_label(entry.get("channel")), power_level]
-    return " ".join(part for part in parts if part).strip()
+    return " | ".join(part for part in parts if part)
 
 
 def get_channel_color(channel: Any, index: int) -> str:
@@ -2131,6 +2139,21 @@ def load_measurement_dataset(logs_root: Path, measurement_id: str) -> dict[str, 
             tx_cable_loss_db,
         )
         tx_antenna = normalise_tx_antenna(series_info.get("antenna"), entry.name)
+        product_text = " ".join(
+            str(value or "")
+            for value in [
+                measurement_dir.name,
+                yaml_summary.get("dut_product"),
+                yaml_summary.get("dut_hardware_config"),
+                yaml_summary.get("tx_mode"),
+                yaml_summary.get("foldername_comment"),
+                entry.name,
+            ]
+        ).lower()
+        if "hendrix" in product_text or "nedrix" in product_text:
+            tx_antenna = "main"
+        elif "wireless pro" in product_text or "wireless-pro" in product_text or "wireless_pro" in product_text:
+            tx_antenna = "FPC ant id1" if tx_antenna == "secondary" else "PCB ant id0"
         folder_record = {
             "folder_name": entry.name,
             "orientation": metadata.get("orientation") or "unknown",

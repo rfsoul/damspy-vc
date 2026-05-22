@@ -33,6 +33,7 @@ const E_OVER_EMAX_DB_GUIDES = [-20, -10, -6, -3];
 const FIXED_CHANNEL_COLORS = new Map([
   ["0", "#ef4444"],
   ["40", "#22c55e"],
+  ["50", "#22c55e"],
   ["80", "#3b82f6"]
 ]);
 
@@ -281,18 +282,32 @@ function formatPowerLevel(value) {
 function normaliseAntennaRole(value) {
   const text = String(value ?? "").trim().toLowerCase();
 
-  if (text.includes("secondary")) {
+  if (text === "1" || text.includes("id1") || text.includes("fpc") || text.includes("secondary")) {
     return "secondary";
   }
 
-  if (text.includes("main") || text.includes("primary")) {
+  if (text === "0" || text.includes("id0") || text.includes("pcb") || text.includes("main") || text.includes("primary")) {
     return "main";
   }
 
   return "";
 }
 
-function formatAntennaLabel(value) {
+function formatAntennaLabel(value, entry = null) {
+  if (entry && entry.antenna_label !== null && entry.antenna_label !== undefined && entry.antenna_label !== "") {
+    return String(entry.antenna_label);
+  }
+
+  const text = String(value ?? "").trim().toLowerCase();
+
+  if (text.includes("fpc") || text.includes("id1")) {
+    return "FPC ant id1";
+  }
+
+  if (text.includes("pcb") || text.includes("id0")) {
+    return "PCB ant id0";
+  }
+
   const antennaRole = normaliseAntennaRole(value);
 
   if (antennaRole === "secondary") {
@@ -308,7 +323,7 @@ function formatAntennaLabel(value) {
 
 function formatSeriesLabel(entry) {
   const measurementLabel = entry && entry.measurement_label ? String(entry.measurement_label).trim() : "";
-  const antennaLabel = formatAntennaLabel(entry.antenna);
+  const antennaLabel = formatAntennaLabel(entry.antenna, entry);
   const powerLevel = formatPowerLevel(entry.power_level);
   return [measurementLabel, antennaLabel, formatChannelLabel(entry.channel), powerLevel].filter(Boolean).join(" | ");
 }
@@ -445,6 +460,26 @@ function applyLineSwatchStyle(element, color, lineStyleKey) {
 
   element.style.background = "transparent";
   element.style.backgroundImage = getLineSwatchBackground(color, lineStyleKey);
+}
+
+function formatSeriesMetrics(entry, mode) {
+  const parts = [
+    mode === PLOT_DISPLAY_MODES.E_OVER_EMAX
+      ? formatEOverEmax(entry.peak_e_over_emax)
+      : formatDbm(entry.peak_dbm),
+    mode === PLOT_DISPLAY_MODES.E_OVER_EMAX
+      ? formatDbm(entry.peak_dbm)
+      : formatSignedDb(entry.peak_offset_db)
+  ];
+
+  if (entry.eirp_dbm !== null && entry.eirp_dbm !== undefined) {
+    parts.push("EIRP " + formatDbm(entry.eirp_dbm));
+  }
+  if (entry.gain_dbd !== null && entry.gain_dbd !== undefined) {
+    parts.push(formatDbdAsDbi(entry.gain_dbd));
+  }
+
+  return parts.join(" | ");
 }
 
 function inferSeriesLevel(entry) {
@@ -628,8 +663,10 @@ function buildAnalyserTitle(data) {
   const product = data && data.dut_product !== null && data.dut_product !== undefined
     ? String(data.dut_product).trim()
     : "";
+  const testDate = data ? formatLocalDate(data.test_date || data.yaml_created_at) : "";
+  const parts = [testDate !== MISSING ? testDate : "", product].filter(Boolean);
 
-  return product ? ANALYSER_DEFAULT_TITLE + " - " + product : ANALYSER_DEFAULT_TITLE;
+  return parts.length ? parts.join(" | ") : ANALYSER_DEFAULT_TITLE;
 }
 
 function buildAnalyserSubtitleRows(data) {
@@ -653,15 +690,11 @@ function buildAnalyserSubtitleRows(data) {
   return [
     {
       left: "DUT_hardware_config: " + formatYamlSummaryValue(data.dut_hardware_config),
-      right: "Test date: " + formatLocalDate(data.yaml_created_at)
-    },
-    {
-      left: "DUT_serial_number: " + formatYamlSummaryValue(data.dut_serial_number),
-      right: "Tester: " + ANALYSER_TESTER_NAME
+      right: "DUT_serial_number: " + formatYamlSummaryValue(data.dut_serial_number)
     },
     {
       left: "tx_mode: " + formatYamlSummaryValue(data.tx_mode),
-      right: ""
+      right: "Tester: " + ANALYSER_TESTER_NAME
     }
   ];
 }
@@ -1907,25 +1940,19 @@ function createPlotLegend(preparedPlot, mode) {
     const swatch = document.createElement("span");
     applyLineSwatchStyle(swatch, entry.color, entry.lineStyleKey);
 
+    const copy = document.createElement("div");
+    copy.className = "legend-copy";
+
     const primary = document.createElement("div");
     primary.className = "legend-primary";
-    const parts = [
-      mode === PLOT_DISPLAY_MODES.E_OVER_EMAX
-        ? formatSeriesLabel(entry) + " " + formatEOverEmax(entry.peak_e_over_emax)
-        : formatSeriesLabel(entry) + " " + formatDbm(entry.peak_dbm),
-      mode === PLOT_DISPLAY_MODES.E_OVER_EMAX
-        ? formatDbm(entry.peak_dbm)
-        : formatSignedDb(entry.peak_offset_db)
-    ];
-    if (entry.eirp_dbm !== null && entry.eirp_dbm !== undefined) {
-      parts.push("EIRP " + formatDbm(entry.eirp_dbm));
-    }
-    if (entry.gain_dbd !== null && entry.gain_dbd !== undefined) {
-      parts.push(formatDbdAsDbi(entry.gain_dbd));
-    }
-    primary.textContent = parts.join(" | ");
+    primary.textContent = formatSeriesLabel(entry);
 
-    item.append(swatch, primary);
+    const secondary = document.createElement("div");
+    secondary.className = "legend-secondary";
+    secondary.textContent = formatSeriesMetrics(entry, mode);
+
+    copy.append(primary, secondary);
+    item.append(swatch, copy);
     legend.append(item);
   }
 
