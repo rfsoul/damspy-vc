@@ -28,6 +28,21 @@ const MEASUREMENT_ROLE_MODES = {
   DUT: "dut",
   BASELINE: "baseline"
 };
+const COMBINED_LINE_STYLE_CHOICES = {
+  SOLID: "solid",
+  DOTTED: "dotted",
+  DOT_DASH: "dot_dash"
+};
+const COMBINED_LINE_STYLE_OPTIONS = [
+  { id: COMBINED_LINE_STYLE_CHOICES.SOLID, label: "Solid", lineStyleKey: "dut-main" },
+  { id: COMBINED_LINE_STYLE_CHOICES.DOTTED, label: "Dotted", lineStyleKey: "baseline-main" },
+  { id: COMBINED_LINE_STYLE_CHOICES.DOT_DASH, label: "Dot-dash", lineStyleKey: "baseline-secondary" }
+];
+const PLOT_FILTER_DIMENSIONS = {
+  POLARISATION: "polarisation",
+  ORIENTATION: "orientation",
+  CHANNEL: "channel"
+};
 const SIG_GEN_DEVICE_HENDRIX_TX = "hendrix_tx";
 const SIG_GEN_DEVICE_WIRELESS_PRO_RX = "wireless-pro-rx";
 const HENDRIX_GREEN = "#22c55e";
@@ -74,6 +89,7 @@ const analyserElements = {
   yamlPickerButton: document.getElementById("yamlPickerButton"),
   combinedSummaryModeButton: document.getElementById("combinedSummaryModeButton"),
   docxSummaryButton: document.getElementById("docxSummaryButton"),
+  plotSnapshotButton: document.getElementById("plotSnapshotButton"),
   summaryCsvButton: document.getElementById("summaryCsvButton"),
   yamlRefreshButton: document.getElementById("yamlRefreshButton"),
   yamlApplyButton: document.getElementById("yamlApplyButton"),
@@ -94,10 +110,13 @@ const analyserElements = {
   plotGridContainer: document.getElementById("plotGridContainer"),
   plotModeDescription: document.getElementById("plotModeDescription"),
   plotFolderScopeSelect: document.getElementById("plotFolderScopeSelect"),
+  deviceRoleField: document.querySelector('label[for="deviceRoleSelect"]'),
   deviceRoleSelect: document.getElementById("deviceRoleSelect"),
   deviceRoleHint: document.getElementById("deviceRoleHint"),
   plotMinimumDbInput: document.getElementById("plotMinimumDbInput"),
   differenceOverlayButton: document.getElementById("differenceOverlayButton"),
+  overlayChannelsButton: document.getElementById("overlayChannelsButton"),
+  plotFilterControls: document.getElementById("plotFilterControls"),
   livePlotRefreshButton: document.getElementById("livePlotRefreshButton"),
   plotModeButtons: Array.from(document.querySelectorAll("[data-plot-mode]"))
 };
@@ -118,7 +137,13 @@ const analyserState = {
   selectedMeasurementId: "",
   selectedMeasurementIds: [],
   combinedSummaryMode: false,
+  combinedMeasurementLineStyles: {},
   dataset: null,
+  overlayChannels: true,
+  plotFilterAll: true,
+  plotFilterPolarisations: [],
+  plotFilterOrientations: [],
+  plotFilterChannels: [],
   plotDisplayMode: PLOT_DISPLAY_MODES.E_OVER_EMAX,
   plotFolderScope: PLOT_FOLDER_SCOPES.BEST,
   measurementRoleMode: MEASUREMENT_ROLE_MODES.AUTO,
@@ -127,6 +152,7 @@ const analyserState = {
   pickerOpen: false,
   listRequestInFlight: false,
   docxSummaryRequestInFlight: false,
+  plotSnapshotRequestInFlight: false,
   summaryCsvRequestInFlight: false,
   dataRequestSerial: 0,
   dataRequestInFlight: false,
@@ -268,6 +294,10 @@ function formatLocalDate(value) {
 
 function formatChannelLabel(channel) {
   return channel === MISSING || channel === null || channel === undefined ? "Ch ?" : "Ch " + channel;
+}
+
+function formatCompactChannelLabel(channel) {
+  return channel === MISSING || channel === null || channel === undefined ? "Ch?" : "Ch" + String(channel).trim();
 }
 
 function formatPowerLevel(value) {
@@ -425,6 +455,20 @@ function isMeasurementSelected(measurementId) {
     : analyserState.selectedMeasurementId === measurementId;
 }
 
+function normaliseCombinedMeasurementLineStyle(value) {
+  const text = String(value ?? "").trim().toLowerCase();
+
+  if (text === COMBINED_LINE_STYLE_CHOICES.DOTTED) {
+    return COMBINED_LINE_STYLE_CHOICES.DOTTED;
+  }
+
+  if (text === COMBINED_LINE_STYLE_CHOICES.DOT_DASH || text === "dot-dash") {
+    return COMBINED_LINE_STYLE_CHOICES.DOT_DASH;
+  }
+
+  return COMBINED_LINE_STYLE_CHOICES.SOLID;
+}
+
 function setSelectedMeasurementIds(measurementIds) {
   const uniqueIds = [];
 
@@ -437,9 +481,319 @@ function setSelectedMeasurementIds(measurementIds) {
   }
 
   analyserState.selectedMeasurementIds = uniqueIds;
+
+  if (analyserState.combinedSummaryMode) {
+    const nextStyles = {};
+
+    for (const measurementId of uniqueIds) {
+      nextStyles[measurementId] = normaliseCombinedMeasurementLineStyle(
+        analyserState.combinedMeasurementLineStyles[measurementId]
+      );
+    }
+
+    analyserState.combinedMeasurementLineStyles = nextStyles;
+  }
+}
+
+function getCombinedMeasurementLineStyleChoice(measurementId) {
+  const text = String(measurementId ?? "").trim();
+  if (!text || !analyserState.selectedMeasurementIds.includes(text)) {
+    return "";
+  }
+
+  return normaliseCombinedMeasurementLineStyle(analyserState.combinedMeasurementLineStyles[text]);
+}
+
+function getCombinedMeasurementLineStyleLabel(choice) {
+  const option = COMBINED_LINE_STYLE_OPTIONS.find((entry) => entry.id === choice);
+  return option ? option.label : "";
+}
+
+function getCombinedMeasurementLineStyleKey(measurementId) {
+  const choice = getCombinedMeasurementLineStyleChoice(measurementId);
+  const option = COMBINED_LINE_STYLE_OPTIONS.find((entry) => entry.id === choice);
+  return option ? option.lineStyleKey : "";
+}
+
+function setCombinedMeasurementSelection(measurementId, lineStyleChoice = "") {
+  const text = String(measurementId ?? "").trim();
+
+  if (!text) {
+    return;
+  }
+
+  const nextSelectedIds = [...analyserState.selectedMeasurementIds];
+  const existingIndex = nextSelectedIds.indexOf(text);
+  const normalisedChoice = lineStyleChoice
+    ? normaliseCombinedMeasurementLineStyle(lineStyleChoice)
+    : "";
+
+  if (normalisedChoice) {
+    if (existingIndex === -1) {
+      nextSelectedIds.push(text);
+    }
+  } else if (existingIndex !== -1) {
+    nextSelectedIds.splice(existingIndex, 1);
+  }
+
+  setSelectedMeasurementIds(nextSelectedIds);
+
+  if (normalisedChoice) {
+    analyserState.combinedMeasurementLineStyles[text] = normalisedChoice;
+  } else {
+    delete analyserState.combinedMeasurementLineStyles[text];
+  }
+
+  analyserState.selectedMeasurementId = analyserState.selectedMeasurementIds[0] || "";
+}
+
+function getPlotFilterArrayForDimension(dimension) {
+  if (dimension === PLOT_FILTER_DIMENSIONS.POLARISATION) {
+    return analyserState.plotFilterPolarisations;
+  }
+
+  if (dimension === PLOT_FILTER_DIMENSIONS.ORIENTATION) {
+    return analyserState.plotFilterOrientations;
+  }
+
+  return analyserState.plotFilterChannels;
+}
+
+function setPlotFilterArrayForDimension(dimension, values) {
+  const uniqueValues = [];
+
+  for (const value of values) {
+    const text = String(value ?? "").trim();
+    if (!text || uniqueValues.includes(text)) {
+      continue;
+    }
+    uniqueValues.push(text);
+  }
+
+  if (dimension === PLOT_FILTER_DIMENSIONS.POLARISATION) {
+    analyserState.plotFilterPolarisations = uniqueValues;
+    return;
+  }
+
+  if (dimension === PLOT_FILTER_DIMENSIONS.ORIENTATION) {
+    analyserState.plotFilterOrientations = uniqueValues;
+    return;
+  }
+
+  analyserState.plotFilterChannels = uniqueValues;
+}
+
+function hasAnyPlotFilterSelection() {
+  return Boolean(
+    analyserState.plotFilterPolarisations.length
+    || analyserState.plotFilterOrientations.length
+    || analyserState.plotFilterChannels.length
+  );
+}
+
+function setPlotFilterAll(enabled) {
+  analyserState.plotFilterAll = enabled !== false;
+}
+
+function togglePlotFilterValue(dimension, value) {
+  const text = String(value ?? "").trim();
+
+  if (!text) {
+    return;
+  }
+
+  if (analyserState.plotFilterAll) {
+    setPlotFilterAll(false);
+  }
+
+  const nextValues = [...getPlotFilterArrayForDimension(dimension)];
+  const existingIndex = nextValues.indexOf(text);
+
+  if (existingIndex === -1) {
+    nextValues.push(text);
+  } else {
+    nextValues.splice(existingIndex, 1);
+  }
+
+  setPlotFilterArrayForDimension(dimension, nextValues);
+
+  if (!hasAnyPlotFilterSelection()) {
+    setPlotFilterAll(true);
+  }
+}
+
+function isPlotFilterValueSelected(dimension, value) {
+  if (analyserState.plotFilterAll) {
+    return false;
+  }
+
+  return getPlotFilterArrayForDimension(dimension).includes(String(value ?? "").trim());
+}
+
+function getAvailablePlotFilterOptions(data) {
+  if (!data) {
+    return {
+      polarisations: [],
+      orientations: [],
+      channels: []
+    };
+  }
+
+  const polarisations = Array.isArray(data.rows) ? data.rows.map((value) => String(value)) : [];
+  const orientations = Array.isArray(data.columns) ? data.columns.map((value) => String(value)) : [];
+  const channels = [];
+
+  for (const plot of data.plots || []) {
+    for (const series of plot.series || []) {
+      const channelValue = series ? series.channel : "";
+      const text = String(channelValue === undefined || channelValue === null ? "" : channelValue).trim();
+      if (text && !channels.includes(text)) {
+        channels.push(text);
+      }
+    }
+  }
+
+  channels.sort((left, right) => {
+    const leftNumber = Number(left);
+    const rightNumber = Number(right);
+
+    if (Number.isFinite(leftNumber) && Number.isFinite(rightNumber)) {
+      return leftNumber - rightNumber;
+    }
+
+    return naturalSortValue(left).localeCompare(naturalSortValue(right));
+  });
+
+  return {
+    polarisations,
+    orientations,
+    channels
+  };
+}
+
+function normalisePlotFiltersForData(data) {
+  const available = getAvailablePlotFilterOptions(data);
+  setPlotFilterArrayForDimension(
+    PLOT_FILTER_DIMENSIONS.POLARISATION,
+    analyserState.plotFilterPolarisations.filter((value) => available.polarisations.includes(value))
+  );
+  setPlotFilterArrayForDimension(
+    PLOT_FILTER_DIMENSIONS.ORIENTATION,
+    analyserState.plotFilterOrientations.filter((value) => available.orientations.includes(value))
+  );
+  setPlotFilterArrayForDimension(
+    PLOT_FILTER_DIMENSIONS.CHANNEL,
+    analyserState.plotFilterChannels.filter((value) => available.channels.includes(value))
+  );
+
+  if (!hasAnyPlotFilterSelection()) {
+    setPlotFilterAll(true);
+  }
+}
+
+function formatPlotFilterLabel(dimension, value) {
+  if (dimension === PLOT_FILTER_DIMENSIONS.CHANNEL) {
+    return formatCompactChannelLabel(value);
+  }
+
+  return String(value ?? "").trim();
+}
+
+function seriesMatchesPlotFilters(plot, series) {
+  if (analyserState.plotFilterAll) {
+    return true;
+  }
+
+  const polarisationFilters = analyserState.plotFilterPolarisations;
+  if (polarisationFilters.length && !polarisationFilters.includes(String(plot.polarisation ?? "").trim())) {
+    return false;
+  }
+
+  const orientationFilters = analyserState.plotFilterOrientations;
+  if (orientationFilters.length && !orientationFilters.includes(String(plot.orientation ?? "").trim())) {
+    return false;
+  }
+
+  const channelFilters = analyserState.plotFilterChannels;
+  if (channelFilters.length && !channelFilters.includes(String(series.channel ?? "").trim())) {
+    return false;
+  }
+
+  return true;
+}
+
+function getRenderablePlotData(data) {
+  if (!data) {
+    return data;
+  }
+
+  const plots = [];
+  const rows = [];
+  const columns = [];
+
+  for (const plot of data.plots || []) {
+    const filteredSeries = (plot.series || []).filter((series) => seriesMatchesPlotFilters(plot, series));
+
+    if (!filteredSeries.length) {
+      continue;
+    }
+
+    const polarisation = String(plot.polarisation ?? "");
+    const orientation = String(plot.orientation ?? "");
+
+    if (!rows.includes(polarisation)) {
+      rows.push(polarisation);
+    }
+
+    if (!columns.includes(orientation)) {
+      columns.push(orientation);
+    }
+
+    plots.push({
+      ...plot,
+      series: filteredSeries
+    });
+  }
+
+  const orientationImages = {};
+  for (const orientation of columns) {
+    if (data.orientation_images && data.orientation_images[orientation]) {
+      orientationImages[orientation] = data.orientation_images[orientation];
+    }
+  }
+
+  return {
+    ...data,
+    rows: rows.sort((left, right) => {
+      if (left === "H") {
+        return right === "H" ? 0 : -1;
+      }
+      if (right === "H") {
+        return 1;
+      }
+      if (left === "V") {
+        return right === "V" ? 0 : -1;
+      }
+      if (right === "V") {
+        return 1;
+      }
+      return naturalSortValue(left).localeCompare(naturalSortValue(right));
+    }),
+    columns: columns.sort((left, right) => naturalSortValue(left).localeCompare(naturalSortValue(right))),
+    orientation_images: orientationImages,
+    plots
+  };
 }
 
 function getSeriesLineStyleKey(entry, measurementRole) {
+  const combinedLineStyleKey = analyserState.combinedSummaryMode
+    ? getCombinedMeasurementLineStyleKey(entry && entry.source_measurement_id)
+    : "";
+
+  if (combinedLineStyleKey) {
+    return combinedLineStyleKey;
+  }
+
   const antennaRole = normaliseAntennaRole(entry && entry.antenna);
   const deviceType = normaliseSigGenDeviceType(entry && entry.device_type);
   const resolvedRole = normaliseMeasurementRole(measurementRole) || MEASUREMENT_ROLE_MODES.DUT;
@@ -1098,6 +1452,218 @@ function updateDocxSummaryButton() {
       : "Create DOCX Summary";
 }
 
+function updatePlotSnapshotButton() {
+  if (!analyserElements.plotSnapshotButton) {
+    return;
+  }
+
+  const hasSnapshotContent = Boolean(analyserState.dataset);
+  analyserElements.plotSnapshotButton.disabled = analyserState.plotSnapshotRequestInFlight || !hasSnapshotContent;
+  analyserElements.plotSnapshotButton.textContent = analyserState.plotSnapshotRequestInFlight
+    ? analyserElements.plotSnapshotButton.textContent
+    : "Save Plot Snapshot";
+}
+
+function getPlotSnapshotTarget() {
+  if (analyserElements.plotGridContainer.childElementCount) {
+    return analyserElements.plotGridContainer;
+  }
+
+  return null;
+}
+
+function cloneNodeWithComputedStyles(sourceNode) {
+  if (sourceNode.nodeType === Node.TEXT_NODE) {
+    return document.createTextNode(sourceNode.textContent || "");
+  }
+
+  if (!(sourceNode instanceof Element)) {
+    return sourceNode.cloneNode(false);
+  }
+
+  const clone = sourceNode.cloneNode(false);
+  const computedStyle = window.getComputedStyle(sourceNode);
+
+  for (const propertyName of Array.from(computedStyle)) {
+    clone.style.setProperty(
+      propertyName,
+      computedStyle.getPropertyValue(propertyName),
+      computedStyle.getPropertyPriority(propertyName)
+    );
+  }
+
+  if (sourceNode instanceof HTMLImageElement) {
+    clone.setAttribute("src", sourceNode.currentSrc || sourceNode.src);
+    clone.setAttribute("alt", sourceNode.alt);
+  }
+
+  for (const childNode of sourceNode.childNodes) {
+    clone.append(cloneNodeWithComputedStyles(childNode));
+  }
+
+  return clone;
+}
+
+async function waitForRenderedImages(root) {
+  const pendingImages = Array.from(root.querySelectorAll("img")).filter((image) => !image.complete);
+
+  await Promise.all(
+    pendingImages.map(
+      (image) =>
+        new Promise((resolve) => {
+          image.addEventListener("load", resolve, { once: true });
+          image.addEventListener("error", resolve, { once: true });
+        })
+    )
+  );
+}
+
+function loadImageElement(url) {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => resolve(image);
+    image.onerror = () => reject(new Error("The snapshot image could not be rendered."));
+    image.src = url;
+  });
+}
+
+function canvasToBlob(canvas, type) {
+  return new Promise((resolve, reject) => {
+    canvas.toBlob((blob) => {
+      if (blob) {
+        resolve(blob);
+        return;
+      }
+
+      reject(new Error("The browser did not return an image blob."));
+    }, type);
+  });
+}
+
+async function renderNodeSnapshotBlob(sourceNode) {
+  const rect = sourceNode.getBoundingClientRect();
+  const contentWidth = Math.max(Math.ceil(rect.width), Math.ceil(sourceNode.scrollWidth), 1);
+  const contentHeight = Math.max(Math.ceil(rect.height), Math.ceil(sourceNode.scrollHeight), 1);
+  const padding = 12;
+  const outputWidth = contentWidth + padding * 2;
+  const outputHeight = contentHeight + padding * 2;
+  const wrapper = document.createElement("div");
+  wrapper.setAttribute("xmlns", "http://www.w3.org/1999/xhtml");
+  wrapper.style.width = outputWidth + "px";
+  wrapper.style.height = outputHeight + "px";
+  wrapper.style.padding = padding + "px";
+  wrapper.style.boxSizing = "border-box";
+  wrapper.style.background = window.getComputedStyle(document.body).backgroundColor || "#0b1320";
+
+  const clonedNode = cloneNodeWithComputedStyles(sourceNode);
+  clonedNode.style.width = contentWidth + "px";
+  clonedNode.style.height = contentHeight + "px";
+  clonedNode.style.maxWidth = "none";
+  wrapper.append(clonedNode);
+
+  const svg = createSvgElement("svg", {
+    xmlns: "http://www.w3.org/2000/svg",
+    width: outputWidth,
+    height: outputHeight,
+    viewBox: `0 0 ${outputWidth} ${outputHeight}`
+  });
+  const foreignObject = createSvgElement("foreignObject", {
+    x: 0,
+    y: 0,
+    width: outputWidth,
+    height: outputHeight
+  });
+  foreignObject.append(wrapper);
+  svg.append(foreignObject);
+
+  const serialisedSvg = new XMLSerializer().serializeToString(svg);
+  const svgBlob = new Blob([serialisedSvg], { type: "image/svg+xml;charset=utf-8" });
+  const svgUrl = URL.createObjectURL(svgBlob);
+
+  try {
+    const image = await loadImageElement(svgUrl);
+    const canvas = document.createElement("canvas");
+    canvas.width = outputWidth * 2;
+    canvas.height = outputHeight * 2;
+    const context = canvas.getContext("2d");
+
+    if (!context) {
+      throw new Error("The browser did not provide a canvas drawing context.");
+    }
+
+    context.scale(2, 2);
+    context.drawImage(image, 0, 0, outputWidth, outputHeight);
+    return canvasToBlob(canvas, "image/png");
+  } finally {
+    URL.revokeObjectURL(svgUrl);
+  }
+}
+
+async function writePlotSnapshot(blob) {
+  const measurementIds = getActiveMeasurementIds();
+
+  if (!measurementIds.length) {
+    throw new Error(
+      analyserState.combinedSummaryMode
+        ? "Select one or more measurements before saving a combined plot snapshot."
+        : "Select a measurement before saving a plot snapshot."
+    );
+  }
+
+  const params = new URLSearchParams();
+  for (const measurementId of measurementIds) {
+    params.append("measurement_id", measurementId);
+  }
+
+  const endpoint = analyserState.combinedSummaryMode
+    ? "/api/results-analyser/write-combined-plot-snapshot?"
+    : "/api/results-analyser/write-plot-snapshot?";
+
+  return fetchJson(endpoint + params.toString(), {
+    method: "POST",
+    headers: {
+      "Content-Type": "image/png"
+    },
+    body: blob
+  });
+}
+
+async function savePlotSnapshot() {
+  if (analyserState.plotSnapshotRequestInFlight || !analyserElements.plotSnapshotButton) {
+    return;
+  }
+
+  const snapshotTarget = getPlotSnapshotTarget();
+
+  if (!snapshotTarget) {
+    setBanner(analyserElements.banner, "warning", "Load analyser plots before saving a snapshot.");
+    return;
+  }
+
+  analyserState.plotSnapshotRequestInFlight = true;
+  analyserElements.plotSnapshotButton.disabled = true;
+  analyserElements.plotSnapshotButton.textContent = "Saving Snapshot...";
+
+  try {
+    await waitForRenderedImages(snapshotTarget);
+    const blob = await renderNodeSnapshotBlob(snapshotTarget);
+    const data = await writePlotSnapshot(blob);
+    const relativePath = data && data.relative_path
+      ? String(data.relative_path)
+      : analyserState.combinedSummaryMode
+        ? "combined_snapshot.png"
+        : "analyser_snapshot.png";
+    setBanner(analyserElements.banner, "success", "Plot snapshot saved: " + relativePath);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unknown error";
+    setBanner(analyserElements.banner, "error", "Unable to save plot snapshot: " + message);
+  } finally {
+    analyserState.plotSnapshotRequestInFlight = false;
+    analyserElements.plotSnapshotButton.disabled = false;
+    updatePlotSnapshotButton();
+  }
+}
+
 async function loadMeasurementList(options = {}) {
   if (analyserState.listRequestInFlight) {
     return;
@@ -1131,6 +1697,7 @@ async function loadMeasurementList(options = {}) {
 
     renderYamlPicker();
     updateDocxSummaryButton();
+    updatePlotSnapshotButton();
 
     if (options.autoLoad && getActiveMeasurementIds().length) {
       if (analyserState.combinedSummaryMode) {
@@ -1184,6 +1751,7 @@ async function loadMeasurementDataset(measurementId, options = {}) {
     clearBanner(analyserElements.banner);
     renderAnalyserData(data);
     updateDocxSummaryButton();
+    updatePlotSnapshotButton();
   } catch (error) {
     if (requestId !== analyserState.dataRequestSerial) {
       return;
@@ -1238,6 +1806,7 @@ async function loadCombinedMeasurementDataset(measurementIds, options = {}) {
     clearBanner(analyserElements.banner);
     renderAnalyserData(data);
     updateDocxSummaryButton();
+    updatePlotSnapshotButton();
   } catch (error) {
     if (requestId !== analyserState.dataRequestSerial) {
       return;
@@ -1295,12 +1864,32 @@ function renderYamlPicker() {
     return;
   }
 
-  for (const measurement of analyserState.measurements) {
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = "yaml-option";
-    button.classList.toggle("is-selected", isMeasurementSelected(measurement.measurement_id));
+  if (analyserState.combinedSummaryMode) {
+    const header = document.createElement("div");
+    header.className = "yaml-option-style-header";
 
+    const spacer = document.createElement("div");
+    spacer.className = "yaml-option-style-header-spacer";
+
+    const copyHeading = document.createElement("div");
+    copyHeading.className = "yaml-option-style-header-copy";
+    copyHeading.textContent = "Pick one line style per YAML to include it in the combined plot.";
+
+    const styleHeadings = document.createElement("div");
+    styleHeadings.className = "yaml-option-style-controls";
+
+    for (const option of COMBINED_LINE_STYLE_OPTIONS) {
+      const label = document.createElement("span");
+      label.className = "yaml-option-style-header-label";
+      label.textContent = option.label;
+      styleHeadings.append(label);
+    }
+
+    header.append(spacer, copyHeading, styleHeadings);
+    analyserElements.yamlOptions.append(header);
+  }
+
+  for (const measurement of analyserState.measurements) {
     const statuses = document.createElement("div");
     statuses.className = "yaml-option-statuses";
 
@@ -1319,41 +1908,82 @@ function renderYamlPicker() {
     meta.textContent = buildMeasurementStatusSummary(measurement);
 
     const indicator = document.createElement("span");
-    indicator.className = "yaml-option-meta";
-    indicator.textContent = analyserState.combinedSummaryMode && isMeasurementSelected(measurement.measurement_id)
-      ? "Selected"
-      : "";
-
-    if (analyserState.combinedSummaryMode) {
-      const checkbox = document.createElement("input");
-      checkbox.type = "checkbox";
-      checkbox.className = "yaml-option-check";
-      checkbox.checked = isMeasurementSelected(measurement.measurement_id);
-      checkbox.tabIndex = -1;
-      checkbox.setAttribute("aria-hidden", "true");
-      button.append(checkbox);
-    }
+    indicator.className = "yaml-option-meta yaml-option-indicator";
 
     copy.append(title, meta);
     statuses.append(quantityStatus, completenessStatus);
-    button.append(statuses, copy, indicator);
-    button.addEventListener("click", async () => {
-      if (analyserState.combinedSummaryMode) {
-        const nextSelectedIds = new Set(analyserState.selectedMeasurementIds);
 
-        if (nextSelectedIds.has(measurement.measurement_id)) {
-          nextSelectedIds.delete(measurement.measurement_id);
-        } else {
-          nextSelectedIds.add(measurement.measurement_id);
-        }
+    if (analyserState.combinedSummaryMode) {
+      const row = document.createElement("div");
+      row.className = "yaml-option yaml-option-combined";
+      row.classList.toggle("is-selected", isMeasurementSelected(measurement.measurement_id));
 
-        setSelectedMeasurementIds(Array.from(nextSelectedIds));
-        analyserState.selectedMeasurementId = analyserState.selectedMeasurementIds[0] || "";
+      const copyButton = document.createElement("button");
+      copyButton.type = "button";
+      copyButton.className = "yaml-option-copy-button";
+      copyButton.append(copy);
+      copyButton.addEventListener("click", () => {
+        const selected = isMeasurementSelected(measurement.measurement_id);
+        setCombinedMeasurementSelection(
+          measurement.measurement_id,
+          selected ? "" : COMBINED_LINE_STYLE_CHOICES.SOLID
+        );
         renderYamlPicker();
         updateDocxSummaryButton();
-        return;
+        updatePlotSnapshotButton();
+      });
+
+      const currentStyle = getCombinedMeasurementLineStyleChoice(measurement.measurement_id);
+      indicator.textContent = currentStyle ? getCombinedMeasurementLineStyleLabel(currentStyle) : "";
+
+      const styleControls = document.createElement("div");
+      styleControls.className = "yaml-option-style-controls";
+
+      for (const option of COMBINED_LINE_STYLE_OPTIONS) {
+        const styleButton = document.createElement("button");
+        styleButton.type = "button";
+        styleButton.className = "yaml-style-choice";
+        styleButton.textContent = option.label;
+        styleButton.classList.toggle("is-active", currentStyle === option.id);
+        styleButton.setAttribute("aria-pressed", String(currentStyle === option.id));
+        styleButton.setAttribute(
+          "aria-label",
+          "Use " + option.label + " lines for " + (measurement.yaml_relative_path || measurement.measurement_id)
+        );
+        styleButton.addEventListener("click", () => {
+          const wasSelected = isMeasurementSelected(measurement.measurement_id);
+          const previousStyle = getCombinedMeasurementLineStyleChoice(measurement.measurement_id);
+          setCombinedMeasurementSelection(measurement.measurement_id, option.id);
+          renderYamlPicker();
+          updateDocxSummaryButton();
+          updatePlotSnapshotButton();
+
+          if (
+            wasSelected
+            && previousStyle
+            && previousStyle !== option.id
+            && analyserState.dataset
+            && analyserState.dataset.combined
+          ) {
+            renderPlotGrid(analyserState.dataset);
+          }
+        });
+        styleControls.append(styleButton);
       }
 
+      row.append(statuses, copyButton, styleControls, indicator);
+      analyserElements.yamlOptions.append(row);
+      continue;
+    }
+
+    indicator.textContent = "";
+
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "yaml-option";
+    button.classList.toggle("is-selected", isMeasurementSelected(measurement.measurement_id));
+    button.append(statuses, copy, indicator);
+    button.addEventListener("click", async () => {
       analyserState.pickerOpen = false;
       renderYamlPicker();
       await loadMeasurementDataset(measurement.measurement_id);
@@ -1397,6 +2027,7 @@ function renderAnalyserEmpty(message) {
   analyserElements.plotGridContainer.replaceChildren();
   updateMeasurementRoleUi();
   updateDocxSummaryButton();
+  updatePlotSnapshotButton();
   updatePlotModeUi();
   updateDifferenceOverlayButton();
 
@@ -1408,12 +2039,16 @@ function renderAnalyserEmpty(message) {
 
 function getPlotModeDescription() {
   if (analyserState.plotDisplayMode === PLOT_DISPLAY_MODES.E_OVER_EMAX) {
-    return "Hover to inspect values on the plot. Click a chart to pin the readout. E/Emax includes -3 dB to -20 dB guide circles.";
+    return analyserState.overlayChannels
+      ? "Hover to inspect values on the plot. Click a chart to pin the readout. E/Emax includes -3 dB to -20 dB guide circles."
+      : "Hover to inspect values on the plot. Click a chart to pin the readout. E/Emax includes -3 dB to -20 dB guide circles, with separate subplots per channel.";
   }
 
   return analyserState.showDifferenceOverlay
     ? "Hover to inspect values on the plot. Click a chart to pin the readout. dB values are relative to the selected set's strongest peak, with per-channel delta overlays for highest minus lowest power."
-    : "Hover to inspect values on the plot. Click a chart to pin the readout. dB values are relative to the selected set's strongest peak, using the selected minimum dB floor.";
+    : analyserState.overlayChannels
+      ? "Hover to inspect values on the plot. Click a chart to pin the readout. dB values are relative to the selected set's strongest peak, using the selected minimum dB floor."
+      : "Hover to inspect values on the plot. Click a chart to pin the readout. dB values are relative to the selected set's strongest peak, using the selected minimum dB floor, with separate subplots per channel.";
 }
 
 function updatePlotModeUi() {
@@ -1426,18 +2061,92 @@ function updatePlotModeUi() {
   updateDifferenceOverlayButton();
 }
 
+function updateOverlayChannelsButton() {
+  if (!analyserElements.overlayChannelsButton) {
+    return;
+  }
+
+  analyserElements.overlayChannelsButton.classList.toggle("is-active", analyserState.overlayChannels);
+  analyserElements.overlayChannelsButton.textContent = analyserState.overlayChannels
+    ? "Overlay Channels On"
+    : "Overlay Channels Off";
+  analyserElements.overlayChannelsButton.setAttribute("aria-pressed", String(analyserState.overlayChannels));
+}
+
+function renderPlotFilterControls() {
+  if (!analyserElements.plotFilterControls) {
+    return;
+  }
+
+  analyserElements.plotFilterControls.replaceChildren();
+  const available = getAvailablePlotFilterOptions(analyserState.dataset);
+
+  const allButton = document.createElement("button");
+  allButton.type = "button";
+  allButton.className = "button button-ghost button-small";
+  allButton.classList.toggle("is-active", analyserState.plotFilterAll);
+  allButton.textContent = "All";
+  allButton.setAttribute("aria-pressed", String(analyserState.plotFilterAll));
+  allButton.addEventListener("click", () => {
+    if (analyserState.plotFilterAll) {
+      return;
+    }
+
+    setPlotFilterAll(true);
+    renderPlotFilterControls();
+    if (analyserState.dataset) {
+      renderPlotGrid(analyserState.dataset);
+    }
+  });
+  analyserElements.plotFilterControls.append(allButton);
+
+  const groups = [
+    { dimension: PLOT_FILTER_DIMENSIONS.POLARISATION, values: available.polarisations },
+    { dimension: PLOT_FILTER_DIMENSIONS.ORIENTATION, values: available.orientations },
+    { dimension: PLOT_FILTER_DIMENSIONS.CHANNEL, values: available.channels }
+  ];
+
+  for (const group of groups) {
+    for (const value of group.values) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "button button-ghost button-small";
+      button.classList.toggle("is-active", isPlotFilterValueSelected(group.dimension, value));
+      button.textContent = formatPlotFilterLabel(group.dimension, value);
+      button.setAttribute("aria-pressed", String(isPlotFilterValueSelected(group.dimension, value)));
+      button.disabled = !analyserState.dataset;
+      button.addEventListener("click", () => {
+        togglePlotFilterValue(group.dimension, value);
+        renderPlotFilterControls();
+        if (analyserState.dataset) {
+          renderPlotGrid(analyserState.dataset);
+        }
+      });
+      analyserElements.plotFilterControls.append(button);
+    }
+  }
+}
+
 function updatePlotControlsUi() {
   if (analyserElements.plotFolderScopeSelect) {
     analyserElements.plotFolderScopeSelect.value = analyserState.plotFolderScope;
   }
 
+  if (analyserElements.deviceRoleField) {
+    analyserElements.deviceRoleField.hidden = analyserState.combinedSummaryMode;
+  }
+
   if (analyserElements.deviceRoleSelect) {
     analyserElements.deviceRoleSelect.value = analyserState.measurementRoleMode;
+    analyserElements.deviceRoleSelect.disabled = analyserState.combinedSummaryMode;
   }
 
   if (analyserElements.plotMinimumDbInput) {
     analyserElements.plotMinimumDbInput.value = String(analyserState.plotMinimumDb);
   }
+
+  updateOverlayChannelsButton();
+  renderPlotFilterControls();
 }
 
 function updateCombinedSummaryModeUi() {
@@ -1451,18 +2160,18 @@ function updateCombinedSummaryModeUi() {
 
   if (analyserElements.yamlPickerButton) {
     analyserElements.yamlPickerButton.textContent = analyserState.combinedSummaryMode
-      ? "Choose YAMLs"
+      ? "Choose & Style YAMLs"
       : "Choose 1_meas_azimuth.yaml";
   }
 
   if (analyserElements.yamlApplyButton) {
     analyserElements.yamlApplyButton.hidden = !analyserState.combinedSummaryMode;
-    analyserElements.yamlApplyButton.textContent = "Plot Selected (" + String(getActiveMeasurementIds().length) + ")";
+    analyserElements.yamlApplyButton.textContent = "Plot Styled Selection (" + String(getActiveMeasurementIds().length) + ")";
   }
 
   if (analyserElements.yamlPickerModeNote) {
     analyserElements.yamlPickerModeNote.textContent = analyserState.combinedSummaryMode
-      ? "Combined summary mode lets you select multiple YAMLs from this folder scope and overlay them together."
+      ? "Combined style mode: choose one line style per YAML. Channel colours still follow the normal channel mapping."
       : "Single summary mode loads one YAML at a time.";
   }
 
@@ -1474,6 +2183,11 @@ function updateMeasurementRoleUi() {
   updateCombinedSummaryModeUi();
 
   if (!analyserElements.deviceRoleHint) {
+    return;
+  }
+
+  if (analyserState.combinedSummaryMode) {
+    analyserElements.deviceRoleHint.textContent = "Combined mode uses your YAML style choices directly, so the DUT/Baseline device-role fallback is not used here. Channel colours still stay mapped by channel.";
     return;
   }
 
@@ -1511,6 +2225,7 @@ function updateLivePlotRefreshButton() {
 }
 
 function renderAnalyserData(data) {
+  normalisePlotFiltersForData(data);
   analyserElements.title.textContent = buildAnalyserTitle(data);
   renderAnalyserSubtitleRows(data);
   analyserElements.selectedYamlPath.textContent = data.yaml_relative_path || MISSING;
@@ -1887,33 +2602,37 @@ function prepareSeriesForPlot(series, dataset, mode, showDifferenceOverlay = fal
 
 function renderPlotGrid(data) {
   analyserElements.plotGridContainer.replaceChildren();
+  const renderData = getRenderablePlotData(data);
 
-  if (!data.rows.length || !data.columns.length) {
+  if (!renderData.rows.length || !renderData.columns.length) {
     const empty = document.createElement("div");
     empty.className = "plot-grid-empty";
-    empty.textContent = "The selected measurement did not contain enough data to build the grid.";
+    empty.textContent = analyserState.plotFilterAll
+      ? "The selected measurement did not contain enough data to build the grid."
+      : "No plots matched the current filter selection.";
     analyserElements.plotGridContainer.append(empty);
+    updatePlotSnapshotButton();
     return;
   }
 
-  const plotMap = new Map(data.plots.map((plot) => [plotKey(plot.polarisation, plot.orientation), plot]));
+  const plotMap = new Map(renderData.plots.map((plot) => [plotKey(plot.polarisation, plot.orientation), plot]));
   const grid = document.createElement("div");
   grid.className = "plot-grid";
-  grid.style.gridTemplateColumns = `4.8rem repeat(${data.rows.length}, minmax(0, 1fr))`;
+  grid.style.gridTemplateColumns = `4.8rem repeat(${renderData.rows.length}, minmax(0, 1fr))`;
 
   const corner = document.createElement("div");
   corner.className = "plot-grid-corner";
   corner.textContent = "Orientation";
   grid.append(corner);
 
-  for (const column of data.rows) {
+  for (const column of renderData.rows) {
     const header = document.createElement("div");
     header.className = "plot-grid-col-header";
     header.textContent = formatPolarisationLabel(column);
     grid.append(header);
   }
 
-  for (const row of data.columns) {
+  for (const row of renderData.columns) {
     const rowHeader = document.createElement("div");
     rowHeader.className = "plot-grid-row-header";
 
@@ -1924,14 +2643,49 @@ function renderPlotGrid(data) {
 
     grid.append(rowHeader);
 
-    for (const column of data.rows) {
+    for (const column of renderData.rows) {
       const plot = plotMap.get(plotKey(column, row));
-      const orientationImageUrl = column === data.rows[0] && data.orientation_images ? data.orientation_images[row] : null;
-      grid.append(createPlotCard(plot, column, row, data, analyserState.plotDisplayMode, orientationImageUrl));
+      const orientationImageUrl = column === renderData.rows[0] && renderData.orientation_images ? renderData.orientation_images[row] : null;
+      grid.append(createPlotCard(plot, column, row, renderData, analyserState.plotDisplayMode, orientationImageUrl));
     }
   }
 
   analyserElements.plotGridContainer.append(grid);
+  updatePlotSnapshotButton();
+}
+
+function groupSeriesByChannel(series) {
+  const grouped = new Map();
+
+  for (const entry of series) {
+    const key = String(entry.channel ?? "");
+    const items = grouped.get(key) || [];
+    items.push(entry);
+    grouped.set(key, items);
+  }
+
+  return Array.from(grouped.entries())
+    .sort((left, right) => naturalSortValue(left[0]).localeCompare(naturalSortValue(right[0])))
+    .map(([channel, items]) => ({ channel, series: items }));
+}
+
+function createPlotSection(series, row, column, dataset, mode, titleText = "") {
+  const measurementRole = resolveMeasurementRole(dataset);
+  const preparedPlot = prepareSeriesForPlot(series, dataset, mode, analyserState.showDifferenceOverlay);
+  const section = document.createElement("section");
+  section.className = "plot-section";
+
+  if (titleText) {
+    const heading = document.createElement("div");
+    heading.className = "plot-section-title";
+    heading.textContent = titleText;
+    section.append(heading);
+  }
+
+  const svg = createPlotSvg(preparedPlot, row, titleText ? column + " " + titleText : column, mode);
+  const legend = createPlotLegend(preparedPlot, mode);
+  section.append(svg, legend);
+  return section;
 }
 
 function createPlotCard(plot, row, column, dataset, mode, orientationImageUrl = null) {
@@ -1948,16 +2702,12 @@ function createPlotCard(plot, row, column, dataset, mode, orientationImageUrl = 
 
   const card = document.createElement("article");
   card.className = "plot-card";
-  const measurementRole = resolveMeasurementRole(dataset);
 
   const colorisedSeries = sortSeries(plot.series).map((entry, index) => ({
     ...entry,
     color: getChannelColor(entry.channel, index, entry.device_type),
-    lineStyleKey: getSeriesLineStyleKey(entry, measurementRole)
+    lineStyleKey: getSeriesLineStyleKey(entry, resolveMeasurementRole(dataset))
   }));
-  const preparedPlot = prepareSeriesForPlot(colorisedSeries, dataset, mode, analyserState.showDifferenceOverlay);
-  const svg = createPlotSvg(preparedPlot, row, column, mode);
-  const legend = createPlotLegend(preparedPlot, mode);
   const visual = document.createElement("div");
   visual.className = "plot-visual";
 
@@ -1974,7 +2724,27 @@ function createPlotCard(plot, row, column, dataset, mode, orientationImageUrl = 
     visual.append(orientationImage);
   }
 
-  visual.append(svg, legend);
+  if (analyserState.overlayChannels) {
+    visual.append(createPlotSection(colorisedSeries, row, column, dataset, mode));
+  } else {
+    const channelSections = document.createElement("div");
+    channelSections.className = "plot-channel-sections";
+
+    for (const channelGroup of groupSeriesByChannel(colorisedSeries)) {
+      channelSections.append(
+        createPlotSection(
+          channelGroup.series,
+          row,
+          column,
+          dataset,
+          mode,
+          formatCompactChannelLabel(channelGroup.channel)
+        )
+      );
+    }
+
+    visual.append(channelSections);
+  }
 
   card.append(visual);
   return card;
@@ -2590,6 +3360,12 @@ function bindAnalyserControls() {
     });
   }
 
+  if (analyserElements.plotSnapshotButton) {
+    analyserElements.plotSnapshotButton.addEventListener("click", async () => {
+      await savePlotSnapshot();
+    });
+  }
+
   if (analyserElements.livePlotRefreshButton) {
     analyserElements.livePlotRefreshButton.addEventListener("click", async () => {
       analyserState.liveRefreshEnabled = !analyserState.liveRefreshEnabled;
@@ -2598,6 +3374,18 @@ function bindAnalyserControls() {
       if (analyserState.liveRefreshEnabled) {
         await ensureAnalyserReady();
         await refreshAnalyserDataIfLive();
+      }
+    });
+  }
+
+  if (analyserElements.overlayChannelsButton) {
+    analyserElements.overlayChannelsButton.addEventListener("click", () => {
+      analyserState.overlayChannels = !analyserState.overlayChannels;
+      updatePlotControlsUi();
+      updatePlotModeUi();
+
+      if (analyserState.dataset) {
+        renderPlotGrid(analyserState.dataset);
       }
     });
   }
@@ -2719,6 +3507,7 @@ updateMeasurementRoleUi();
 updatePlotModeUi();
 updateLivePlotRefreshButton();
 updateDocxSummaryButton();
+updatePlotSnapshotButton();
 renderRoute();
 refreshMeasurementData();
 window.setInterval(refreshMeasurementData, REFRESH_MS);

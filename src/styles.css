@@ -619,6 +619,34 @@ textarea {
   gap: 0.75rem;
 }
 
+.yaml-option-style-header,
+.yaml-option-combined {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) minmax(19rem, 24rem) auto;
+  align-items: center;
+  gap: 0.9rem;
+}
+
+.yaml-option-style-header {
+  padding: 0 0.2rem;
+  color: var(--muted);
+  font-size: 0.84rem;
+  font-weight: 800;
+}
+
+.yaml-option-style-header-spacer {
+  width: 5.1rem;
+}
+
+.yaml-option-style-header-copy {
+  min-width: 0;
+}
+
+.yaml-option-style-header-label {
+  text-align: center;
+  white-space: nowrap;
+}
+
 .yaml-option {
   width: 100%;
   text-align: left;
@@ -627,6 +655,10 @@ textarea {
   grid-template-columns: auto auto minmax(0, 1fr) auto;
   align-items: center;
   gap: 0.9rem;
+}
+
+.yaml-option.yaml-option-combined {
+  grid-template-columns: auto minmax(0, 1fr) minmax(19rem, 24rem) auto;
 }
 
 .yaml-option.is-selected {
@@ -643,6 +675,21 @@ textarea {
 
 .yaml-option-copy {
   min-width: 0;
+}
+
+.yaml-option-copy-button {
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.yaml-option-copy-button:hover .yaml-option-title,
+.yaml-option-copy-button:focus-visible .yaml-option-title {
+  color: var(--accent);
 }
 
 .yaml-option-check {
@@ -662,6 +709,38 @@ textarea {
   margin-top: 0.3rem;
   color: var(--muted);
   font-size: 0.92rem;
+}
+
+.yaml-option-indicator {
+  min-width: 4.8rem;
+  margin-top: 0;
+  text-align: right;
+  font-weight: 800;
+  color: var(--muted-strong);
+}
+
+.yaml-option-style-controls {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.45rem;
+}
+
+.yaml-style-choice {
+  min-height: 2.2rem;
+  padding: 0.45rem 0.55rem;
+  border-radius: 0.8rem;
+  border: 1px solid var(--border);
+  background: var(--button-ghost-bg);
+  color: var(--muted-strong);
+  font-size: 0.84rem;
+  font-weight: 800;
+  text-align: center;
+}
+
+.yaml-style-choice.is-active {
+  border-color: var(--border-strong);
+  background: var(--selected-bg);
+  color: var(--text);
 }
 
 .status-badge {
@@ -779,6 +858,12 @@ textarea {
   font-weight: 700;
 }
 
+.plot-filter-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
 .plot-panel {
   min-height: calc(100vh - 2rem);
   display: flex;
@@ -840,6 +925,28 @@ textarea {
   gap: 0.12rem;
   align-items: start;
   position: relative;
+}
+
+.plot-channel-sections {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.plot-section {
+  display: grid;
+  gap: 0.12rem;
+}
+
+.plot-section-title {
+  padding: 0.15rem 0.32rem;
+  border-radius: 0.5rem;
+  background: var(--legend-bg);
+  border: 1px solid var(--border);
+  color: var(--plot-text);
+  font-size: 0.84rem;
+  font-weight: 900;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
 }
 
 .plot-readout-overlay {
@@ -1049,6 +1156,16 @@ textarea {
 @media (max-width: 1100px) {
   .main-grid {
     grid-template-columns: 1fr;
+  }
+
+  .yaml-option-style-header,
+  .yaml-option.yaml-option-combined {
+    grid-template-columns: 1fr;
+  }
+
+  .yaml-option-style-header-spacer,
+  .yaml-option-indicator {
+    display: none;
   }
 
   .plot-section-controls {

@@ -57,6 +57,8 @@ FIXED_CHANNEL_COLORS = {
 }
 MEASUREMENT_ROLE_DUT = "dut"
 MEASUREMENT_ROLE_BASELINE = "baseline"
+ANALYSER_SNAPSHOT_FILENAME = "analyser_snapshot.png"
+PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 PREFERRED_DEFAULT_MEASUREMENT_ID = (
     BEST_FOLDER_NAME + "/"
     "Antenna_Pattern_Measurement-2026-04-10_11-22-16-"
@@ -329,6 +331,102 @@ def series_line_pattern(antenna: Any, device_type: Any, measurement_role: str) -
         return (2, 10)
 
     return None
+
+
+def infer_report_tx_power_dbm(device_type: Any, *fallback_values: Any) -> float | None:
+    normalised_device_type = normalise_sig_gen_device_type(device_type)
+
+    if normalised_device_type == SIG_GEN_DEVICE_HENDRIX_TX:
+        return 18.0
+
+    if normalised_device_type == SIG_GEN_DEVICE_WIRELESS_PRO_RX:
+        return 14.0
+
+    combined = " ".join(str(value or "") for value in fallback_values).strip().lower()
+    if "hendrix" in combined or "rxcc" in combined:
+        return 18.0
+    if "wireless-pro" in combined or "wireless pro" in combined:
+        return 14.0
+
+    return None
+
+
+def antenna_summary_sort_rank(value: Any) -> int:
+    antenna_role = normalise_tx_antenna(value)
+    if antenna_role == "main":
+        return 0
+    if antenna_role == "secondary":
+        return 1
+    return 2
+
+
+def build_plot_summary_rows(dataset: dict[str, Any]) -> list[list[str]]:
+    grouped: dict[tuple[str, str, str, str], dict[str, Any]] = {}
+    default_product = report_value(dataset.get("dut_product") or dataset.get("measurement_name"))
+
+    for plot in dataset.get("plots") or []:
+        polarisation = report_value(plot.get("polarisation"))
+        orientation = report_value(plot.get("orientation"))
+
+        for series in plot.get("series") or []:
+            product_name = report_value(series.get("product_name") or default_product)
+            antenna_label = report_value(format_antenna_label(series.get("antenna")) or series.get("antenna"))
+            key = (product_name, antenna_label, polarisation, orientation)
+            tx_power_dbm = infer_report_tx_power_dbm(
+                series.get("device_type"),
+                series.get("product_name"),
+                dataset.get("dut_product"),
+                dataset.get("measurement_name"),
+            )
+            row = grouped.setdefault(
+                key,
+                {
+                    "product_name": product_name,
+                    "antenna_label": antenna_label,
+                    "polarisation": polarisation,
+                    "orientation": orientation,
+                    "tx_power_dbm": tx_power_dbm,
+                    "best_eirp_dbm": None,
+                    "best_dbi": None,
+                },
+            )
+
+            eirp_dbm = coerce_float(series.get("eirp_dbm"))
+            gain_dbi = dbd_to_dbi(series.get("gain_dbd"))
+
+            if eirp_dbm is not None:
+                row["best_eirp_dbm"] = eirp_dbm if row["best_eirp_dbm"] is None else max(row["best_eirp_dbm"], eirp_dbm)
+
+            if gain_dbi is not None:
+                row["best_dbi"] = gain_dbi if row["best_dbi"] is None else max(row["best_dbi"], gain_dbi)
+
+    rows = [["Product", "Antenna", "Polarisation", "Orientation", "TX Power", "Best EIRP", "Best dBi"]]
+    ordered_keys = sorted(
+        grouped.keys(),
+        key=lambda item: (
+            natural_sort_key(item[0]),
+            antenna_summary_sort_rank(item[1]),
+            natural_sort_key(item[1]),
+            polarisation_sort_key(item[2]),
+            natural_sort_key(item[3]),
+        ),
+    )
+
+    for key in ordered_keys:
+        row = grouped[key]
+        rows.append(
+            [
+                row["product_name"],
+                row["antenna_label"],
+                row["polarisation"],
+                row["orientation"],
+                report_dbm(row["tx_power_dbm"]),
+                report_dbm(row["best_eirp_dbm"]),
+                report_dbi(row["best_dbi"]),
+            ]
+        )
+
+    return rows
 
 
 def should_close_polar_wrap(points: list[dict[str, Any]], max_wrap_gap_degrees: float = 10.0) -> bool:
@@ -1010,6 +1108,7 @@ def load_combined_measurement_dataset(logs_root: Path, measurement_ids: list[str
                     {
                         "source_measurement_id": dataset.get("measurement_id"),
                         "source_measurement_name": dataset.get("measurement_name"),
+                        "product_name": dataset.get("dut_product") or dataset.get("measurement_name"),
                         "measurement_label": short_measurement_label(dataset.get("measurement_name")),
                         "folder_name": series.get("folder_name"),
                         "polarisation": plot.get("polarisation"),
@@ -1039,6 +1138,7 @@ def load_combined_measurement_dataset(logs_root: Path, measurement_ids: list[str
             "selection_count": len(datasets),
             "source_measurements": source_measurements,
             "suggested_measurement_role": anchor.get("suggested_measurement_role"),
+            "sig_gen_1_device_type": common_text_value([dataset.get("sig_gen_1_device_type") for dataset in datasets]) or anchor.get("sig_gen_1_device_type"),
             "dut_product": common_text_value([dataset.get("dut_product") for dataset in datasets]) or anchor.get("dut_product"),
             "dut_hardware_config": common_text_value([dataset.get("dut_hardware_config") for dataset in datasets]),
             "dut_serial_number": common_text_value([dataset.get("dut_serial_number") for dataset in datasets]),
@@ -1082,6 +1182,7 @@ def load_combined_measurement_dataset(logs_root: Path, measurement_ids: list[str
             {
                 "source_measurement_id": series.get("source_measurement_id"),
                 "source_measurement_name": series.get("source_measurement_name"),
+                "product_name": series.get("product_name"),
                 "measurement_label": series.get("measurement_label"),
                 "folder_name": series.get("folder_name"),
                 "orientation": series.get("orientation"),
@@ -1110,6 +1211,7 @@ def load_combined_measurement_dataset(logs_root: Path, measurement_ids: list[str
             {
                 "source_measurement_id": series.get("source_measurement_id"),
                 "source_measurement_name": series.get("source_measurement_name"),
+                "product_name": series.get("product_name"),
                 "measurement_label": series.get("measurement_label"),
                 "folder_name": series.get("folder_name"),
                 "channel": series.get("channel"),
@@ -1143,6 +1245,7 @@ def load_combined_measurement_dataset(logs_root: Path, measurement_ids: list[str
         "selection_count": len(datasets),
         "source_measurements": source_measurements,
         "suggested_measurement_role": anchor.get("suggested_measurement_role"),
+        "sig_gen_1_device_type": common_text_value([dataset.get("sig_gen_1_device_type") for dataset in datasets]) or anchor.get("sig_gen_1_device_type"),
         "dut_product": common_text_value([dataset.get("dut_product") for dataset in datasets]) or "Combined Selection",
         "dut_hardware_config": common_text_value([dataset.get("dut_hardware_config") for dataset in datasets]),
         "dut_serial_number": common_text_value([dataset.get("dut_serial_number") for dataset in datasets]),
@@ -1517,6 +1620,16 @@ def report_db(value: Any) -> str:
     return "-" if numeric_value is None else f"{numeric_value:.1f} dB"
 
 
+def report_dbi(value: Any) -> str:
+    numeric_value = coerce_float(value)
+    return "-" if numeric_value is None else f"{numeric_value:.1f} dBi"
+
+
+def dbd_to_dbi(value: Any) -> float | None:
+    numeric_value = coerce_float(value)
+    return None if numeric_value is None else numeric_value + 2.15
+
+
 def report_hz(value: Any) -> str:
     numeric_value = coerce_float(value)
     if numeric_value is None:
@@ -1770,7 +1883,20 @@ def render_analyser_summary_plot(plot: dict[str, Any], output_path: Path, measur
             5,
             pattern,
         )
-        text = f"{format_series_label(entry)} | Peak {report_dbm(entry.get('peak_dbm'))}"
+        entry_values = [
+            coerce_float(point.get("rx_peak_dbm"))
+            for point in entry.get("points", [])
+            if coerce_float(point.get("rx_peak_dbm")) is not None
+        ]
+        entry_min = min(entry_values) if entry_values else None
+        gain_dbi = dbd_to_dbi(entry.get("gain_dbd"))
+        text = (
+            f"{format_series_label(entry)} | "
+            f"Peak {report_dbm(entry.get('peak_dbm'))} | "
+            f"Min {report_dbm(entry_min)} | "
+            f"EIRP {report_dbm(entry.get('eirp_dbm'))} | "
+            f"{report_dbi(gain_dbi)}"
+        )
         draw.text((96, row_y), text, fill=muted, font=font_legend)
 
     image.save(extended_path(output_path), format="PNG")
@@ -1920,6 +2046,11 @@ def write_analyser_docx_summary(logs_root: Path, measurement_id: str, measuremen
         dataset.get("dut_product"),
         dataset.get("measurement_name"),
     )
+    report_tx_power_dbm = infer_report_tx_power_dbm(
+        dataset.get("sig_gen_1_device_type"),
+        dataset.get("dut_product"),
+        dataset.get("measurement_name"),
+    )
 
     builder.add_paragraph("DAMSpy Results Analyser Summary", "Title")
     builder.add_paragraph(dataset.get("measurement_name", measurement_id), "Subtitle")
@@ -1942,6 +2073,7 @@ def write_analyser_docx_summary(logs_root: Path, measurement_id: str, measuremen
             ["DUT hardware config", report_value(dataset.get("dut_hardware_config"))],
             ["DUT serial number", report_value(dataset.get("dut_serial_number"))],
             ["TX mode", report_value(dataset.get("tx_mode"))],
+            ["TX power", report_dbm(report_tx_power_dbm)],
             ["Device role", resolved_measurement_role.title()],
             ["RX antenna", report_value(dataset.get("rx_antenna_name"))],
             ["RX antenna comment", report_value(dataset.get("rx_antenna_comment"))],
@@ -1964,53 +2096,14 @@ def write_analyser_docx_summary(logs_root: Path, measurement_id: str, measuremen
     builder.add_table(yaml_rows, [2800, 6560])
 
     builder.add_heading("Plot Summary", 1)
-    plot_rows = [["Polarisation", "Orientation", "Series", "Peak", "Minimum"]]
-    for plot in dataset.get("plots") or []:
-        values = [
-            point["rx_peak_dbm"]
-            for series in plot.get("series", [])
-            for point in series.get("points", [])
-            if coerce_float(point.get("rx_peak_dbm")) is not None
-        ]
-        plot_rows.append(
-            [
-                plot.get("polarisation"),
-                plot.get("orientation"),
-                len(plot.get("series") or []),
-                report_dbm(max(values) if values else None),
-                report_dbm(min(values) if values else None),
-            ]
-    )
-    builder.add_table(plot_rows, [1700, 2100, 1400, 2080, 2080])
+    plot_rows = build_plot_summary_rows(dataset)
+    builder.add_table(plot_rows, [2200, 1700, 1200, 1200, 1200, 1400, 1400])
 
     builder.add_heading("Analyser Summary Plots", 1)
     with tempfile.TemporaryDirectory(prefix="damspy_docx_") as temp_dir_name:
         temp_output_dir = Path(temp_dir_name)
         for caption, image_path in render_analyser_summary_plots(temp_output_dir, dataset, resolved_measurement_role):
             builder.add_image(image_path, f"Analyser plot: {caption}", max_width_in=6.1)
-
-        builder.add_heading("Individual PNG Plots", 1)
-        pngs_by_folder: dict[str, Path] = {}
-        for folder in dataset.get("folders") or []:
-            folder_path = results_dir / str(folder.get("folder_name", ""))
-            png_path = find_first_png(folder_path)
-            if png_path is not None:
-                pngs_by_folder[str(folder.get("folder_name"))] = png_path
-
-        for plot in dataset.get("plots") or []:
-            builder.add_heading(f"{plot.get('polarisation')} / {plot.get('orientation')}", 2)
-            for series in plot.get("series") or []:
-                folder_name = str(series.get("folder_name", ""))
-                png_path = pngs_by_folder.get(folder_name)
-                if png_path is None:
-                    continue
-                caption = (
-                    f"{folder_name} | Antenna {report_value(format_antenna_label(series.get('antenna')) or '-')} | "
-                    f"Channel {report_value(series.get('channel'))} | "
-                    f"Power {report_value(series.get('power_level'))} | "
-                    f"{report_hz(series.get('frequency_hz'))} | Peak {report_dbm(series.get('peak_dbm'))}"
-                )
-                builder.add_image(png_path, caption)
 
         builder.write(output_path)
     return output_path
@@ -2039,6 +2132,10 @@ def combined_summary_filename() -> str:
     return "combined_summary_" + datetime.now().strftime("%Y-%m-%d_%H-%M-%S") + ".docx"
 
 
+def combined_snapshot_filename() -> str:
+    return "combined_snapshot_" + datetime.now().strftime("%Y-%m-%d_%H-%M-%S") + ".png"
+
+
 def write_combined_analyser_docx_summary(
     logs_root: Path,
     measurement_ids: list[str],
@@ -2051,6 +2148,11 @@ def write_combined_analyser_docx_summary(
     output_path = output_measurement_dir / combined_summary_filename()
     builder = DocxReportBuilder("DAMSpy Combined Results Summary")
     resolved_measurement_role = normalise_measurement_role(measurement_role) or infer_measurement_role(
+        combined_dataset.get("dut_product"),
+        combined_dataset.get("measurement_name"),
+    )
+    report_tx_power_dbm = infer_report_tx_power_dbm(
+        combined_dataset.get("sig_gen_1_device_type"),
         combined_dataset.get("dut_product"),
         combined_dataset.get("measurement_name"),
     )
@@ -2093,6 +2195,7 @@ def write_combined_analyser_docx_summary(
             ["DUT hardware config", report_value(combined_dataset.get("dut_hardware_config"))],
             ["DUT serial number", report_value(combined_dataset.get("dut_serial_number"))],
             ["TX mode", report_value(combined_dataset.get("tx_mode"))],
+            ["TX power", report_dbm(report_tx_power_dbm)],
             ["RX antenna", report_value(combined_dataset.get("rx_antenna_name"))],
             ["RX antenna comment", report_value(combined_dataset.get("rx_antenna_comment"))],
             ["RX antenna gain", report_value(combined_dataset.get("rx_antenna_gain_dbi"), " dBi")],
@@ -2104,24 +2207,8 @@ def write_combined_analyser_docx_summary(
     )
 
     builder.add_heading("Combined Plot Summary", 1)
-    plot_rows = [["Polarisation", "Orientation", "Series", "Peak", "Minimum"]]
-    for plot in combined_dataset.get("plots") or []:
-        values = [
-            point["rx_peak_dbm"]
-            for series in plot.get("series", [])
-            for point in series.get("points", [])
-            if coerce_float(point.get("rx_peak_dbm")) is not None
-        ]
-        plot_rows.append(
-            [
-                plot.get("polarisation"),
-                plot.get("orientation"),
-                len(plot.get("series") or []),
-                report_dbm(max(values) if values else None),
-                report_dbm(min(values) if values else None),
-            ]
-        )
-    builder.add_table(plot_rows, [1700, 2100, 1400, 2080, 2080])
+    plot_rows = build_plot_summary_rows(combined_dataset)
+    builder.add_table(plot_rows, [2200, 1700, 1200, 1200, 1200, 1400, 1400])
 
     builder.add_heading("Combined Summary Plots", 1)
     with tempfile.TemporaryDirectory(prefix="damspy_combined_docx_") as temp_dir_name:
@@ -2131,6 +2218,33 @@ def write_combined_analyser_docx_summary(
 
         builder.write(output_path)
 
+    return output_path
+
+
+def write_analyser_plot_snapshot(logs_root: Path, measurement_id: str, image_bytes: bytes) -> Path:
+    measurement_dir, _, _ = resolve_measurement(logs_root, measurement_id)
+
+    if not image_bytes:
+        raise ValueError("Snapshot image data is required")
+
+    output_path = measurement_dir / ANALYSER_SNAPSHOT_FILENAME
+    output_path.write_bytes(image_bytes)
+    return output_path
+
+
+def write_combined_analyser_plot_snapshot(logs_root: Path, measurement_ids: list[str], image_bytes: bytes) -> Path:
+    ordered_measurement_ids = dedupe_measurement_ids(measurement_ids)
+
+    if not ordered_measurement_ids:
+        raise ValueError("At least one measurement_id is required")
+
+    if not image_bytes:
+        raise ValueError("Snapshot image data is required")
+
+    output_measurement_id = latest_measurement_id(logs_root, ordered_measurement_ids)
+    output_measurement_dir, _, _ = resolve_measurement(logs_root, output_measurement_id)
+    output_path = output_measurement_dir / combined_snapshot_filename()
+    output_path.write_bytes(image_bytes)
     return output_path
 
 
@@ -2240,6 +2354,7 @@ def load_measurement_dataset(logs_root: Path, measurement_id: str) -> dict[str, 
             tx_antenna = "FPC ant id1" if tx_antenna == "secondary" else "PCB ant id0"
         folder_record = {
             "folder_name": entry.name,
+            "product_name": yaml_summary.get("dut_product") or measurement_dir.name,
             "orientation": metadata.get("orientation") or "unknown",
             "polarisation": metadata.get("polarisation") or "unknown",
             "channel": series_info.get("channel"),
@@ -2317,6 +2432,7 @@ def load_measurement_dataset(logs_root: Path, measurement_id: str) -> dict[str, 
         folder_records.append(
             {
                 "folder_name": folder["folder_name"],
+                "product_name": folder.get("product_name"),
                 "orientation": folder["orientation"],
                 "polarisation": folder["polarisation"],
                 "channel": folder["channel"],
@@ -2338,6 +2454,7 @@ def load_measurement_dataset(logs_root: Path, measurement_id: str) -> dict[str, 
             series_records.append(
                 {
                     "folder_name": folder["folder_name"],
+                    "product_name": folder.get("product_name"),
                     "channel": folder["channel"],
                     "power_level": folder["power_level"],
                     "antenna": folder["antenna"],
@@ -2433,6 +2550,19 @@ class WOYMRequestHandler(SimpleHTTPRequestHandler):
 
         super().do_GET()
 
+    def do_POST(self) -> None:
+        clean_path = urlsplit(self.path).path
+
+        if clean_path == "/api/results-analyser/write-plot-snapshot":
+            self.handle_write_plot_snapshot()
+            return
+
+        if clean_path == "/api/results-analyser/write-combined-plot-snapshot":
+            self.handle_write_combined_plot_snapshot()
+            return
+
+        self.send_json({"error": f"Unsupported POST endpoint: {clean_path}"}, status=HTTPStatus.NOT_FOUND)
+
     def translate_path(self, path: str) -> str:
         clean_path = urlsplit(path).path
         clean_path = unquote(clean_path)
@@ -2464,6 +2594,33 @@ class WOYMRequestHandler(SimpleHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
         self.wfile.write(body)
+
+    def read_request_body(self) -> bytes:
+        content_length_header = self.headers.get("Content-Length", "").strip()
+
+        if not content_length_header:
+            return b""
+
+        try:
+            content_length = int(content_length_header)
+        except ValueError as exc:
+            raise ValueError("Content-Length header must be an integer") from exc
+
+        if content_length < 0:
+            raise ValueError("Content-Length must not be negative")
+
+        return self.rfile.read(content_length)
+
+    def read_png_request_body(self) -> bytes:
+        image_bytes = self.read_request_body()
+
+        if not image_bytes:
+            raise ValueError("Snapshot image data is required")
+
+        if not image_bytes.startswith(PNG_SIGNATURE):
+            raise ValueError("Snapshot payload must be a PNG image")
+
+        return image_bytes
 
     def handle_yaml_list(self) -> None:
         query = parse_qs(urlsplit(self.path).query)
@@ -2597,6 +2754,49 @@ class WOYMRequestHandler(SimpleHTTPRequestHandler):
             }
         )
 
+    def handle_write_plot_snapshot(self) -> None:
+        query = parse_qs(urlsplit(self.path).query)
+        measurement_id = query.get("measurement_id", [""])[0]
+
+        if not measurement_id:
+            self.send_json(
+                {"error": "measurement_id query parameter is required"},
+                status=HTTPStatus.BAD_REQUEST,
+            )
+            return
+
+        try:
+            image_bytes = self.read_png_request_body()
+            output_path = write_analyser_plot_snapshot(self.logs_root, measurement_id, image_bytes)
+        except PermissionError as exc:
+            self.send_json(
+                {
+                    "error": (
+                        "Permission denied while writing the plot snapshot. "
+                        "Close the existing analyser_snapshot.png if it is open or locked by another application. "
+                        f"Path: {exc.filename or measurement_id}"
+                    ),
+                },
+                status=HTTPStatus.CONFLICT,
+            )
+            return
+        except FileNotFoundError as exc:
+            self.send_json({"error": str(exc)}, status=HTTPStatus.NOT_FOUND)
+            return
+        except ValueError as exc:
+            self.send_json({"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
+            return
+        except Exception as exc:
+            self.send_json({"error": str(exc)}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+            return
+
+        self.send_json(
+            {
+                "output_path": str(output_path),
+                "relative_path": display_path(output_path, self.logs_root),
+            }
+        )
+
     def handle_write_combined_docx_summary(self) -> None:
         query = parse_qs(urlsplit(self.path).query)
         measurement_ids = parse_measurement_ids(query)
@@ -2617,6 +2817,49 @@ class WOYMRequestHandler(SimpleHTTPRequestHandler):
                     "error": (
                         "Permission denied while writing the combined DOCX summary. "
                         "Close any existing combined_summary DOCX that may be open in Word or locked by Explorer preview. "
+                        f"Path: {exc.filename or ', '.join(measurement_ids)}"
+                    ),
+                },
+                status=HTTPStatus.CONFLICT,
+            )
+            return
+        except FileNotFoundError as exc:
+            self.send_json({"error": str(exc)}, status=HTTPStatus.NOT_FOUND)
+            return
+        except ValueError as exc:
+            self.send_json({"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
+            return
+        except Exception as exc:
+            self.send_json({"error": str(exc)}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+            return
+
+        self.send_json(
+            {
+                "output_path": str(output_path),
+                "relative_path": display_path(output_path, self.logs_root),
+            }
+        )
+
+    def handle_write_combined_plot_snapshot(self) -> None:
+        query = parse_qs(urlsplit(self.path).query)
+        measurement_ids = parse_measurement_ids(query)
+
+        if not measurement_ids:
+            self.send_json(
+                {"error": "At least one measurement_id query parameter is required"},
+                status=HTTPStatus.BAD_REQUEST,
+            )
+            return
+
+        try:
+            image_bytes = self.read_png_request_body()
+            output_path = write_combined_analyser_plot_snapshot(self.logs_root, measurement_ids, image_bytes)
+        except PermissionError as exc:
+            self.send_json(
+                {
+                    "error": (
+                        "Permission denied while writing the combined plot snapshot. "
+                        "Close any existing combined_snapshot PNG that may be open or locked by another application. "
                         f"Path: {exc.filename or ', '.join(measurement_ids)}"
                     ),
                 },
