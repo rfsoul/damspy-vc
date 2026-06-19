@@ -82,6 +82,7 @@ const measurementElements = {
 const analyserElements = {
   page: document.getElementById("resultsAnalyserPage"),
   banner: document.getElementById("analyserBanner"),
+  unhingedBanner: document.getElementById("unhingedModeBanner"),
   title: document.getElementById("analyserTitle"),
   subtitle: document.getElementById("analyserSubtitle"),
   measurementDetailsPanel: document.getElementById("measurementDetailsPanel"),
@@ -2223,6 +2224,10 @@ function updateUnhingedModeUi() {
   analyserElements.unhingedModeButton.classList.toggle("button-unhinged", true);
   analyserElements.unhingedModeButton.classList.toggle("is-active", analyserState.unhingedMode);
   analyserElements.unhingedModeButton.setAttribute("aria-pressed", String(analyserState.unhingedMode));
+
+  if (analyserElements.unhingedBanner) {
+    analyserElements.unhingedBanner.hidden = !analyserState.unhingedMode;
+  }
 }
 
 function updateOverlayChannelsButton() {
@@ -2838,8 +2843,7 @@ function groupSeriesByChannel(series) {
     .map(([channel, items]) => ({ channel, series: items }));
 }
 
-function createPlotSection(series, row, column, dataset, mode, titleText = "") {
-  const measurementRole = resolveMeasurementRole(dataset);
+function createPlotSection(series, row, column, dataset, mode, titleText = "", spinConfig = null) {
   const preparedPlot = prepareSeriesForPlot(series, dataset, mode, analyserState.showDifferenceOverlay);
   const section = document.createElement("section");
   section.className = "plot-section";
@@ -2851,7 +2855,7 @@ function createPlotSection(series, row, column, dataset, mode, titleText = "") {
     section.append(heading);
   }
 
-  const svg = createPlotSvg(preparedPlot, row, titleText ? column + " " + titleText : column, mode);
+  const svg = createPlotSvg(preparedPlot, row, titleText ? column + " " + titleText : column, mode, spinConfig);
   const legend = createPlotLegend(preparedPlot, mode);
   section.append(svg, legend);
   return section;
@@ -2861,7 +2865,6 @@ function createPlotCard(plot, row, column, dataset, mode, orientationImageUrl = 
   if (!plot || !plot.series.length) {
     const empty = document.createElement("div");
     empty.className = "plot-card";
-    empty.classList.toggle("plot-card-unhinged", analyserState.unhingedMode);
 
     const label = document.createElement("div");
     label.className = "plot-empty";
@@ -2872,10 +2875,11 @@ function createPlotCard(plot, row, column, dataset, mode, orientationImageUrl = 
 
   const card = document.createElement("article");
   card.className = "plot-card";
-  card.classList.toggle("plot-card-unhinged", analyserState.unhingedMode);
   const spinSeed = Math.abs((String(row) + "::" + String(column)).split("").reduce((total, character) => total + character.charCodeAt(0), 0));
-  card.style.setProperty("--spin-duration", (6 + (spinSeed % 5) * 0.65).toFixed(2) + "s");
-  card.style.setProperty("--spin-delay", ((spinSeed % 9) * -0.22).toFixed(2) + "s");
+  const spinConfig = {
+    duration: (6 + (spinSeed % 5) * 0.65).toFixed(2) + "s",
+    delay: ((spinSeed % 9) * -0.22).toFixed(2) + "s"
+  };
 
   const colorisedSeries = sortSeries(plot.series).map((entry, index) => ({
     ...entry,
@@ -2899,7 +2903,7 @@ function createPlotCard(plot, row, column, dataset, mode, orientationImageUrl = 
   }
 
   if (analyserState.overlayChannels) {
-    visual.append(createPlotSection(colorisedSeries, row, column, dataset, mode));
+    visual.append(createPlotSection(colorisedSeries, row, column, dataset, mode, "", spinConfig));
   } else {
     const channelSections = document.createElement("div");
     channelSections.className = "plot-channel-sections";
@@ -2912,7 +2916,8 @@ function createPlotCard(plot, row, column, dataset, mode, orientationImageUrl = 
           column,
           dataset,
           mode,
-          formatCompactChannelLabel(channelGroup.channel)
+          formatCompactChannelLabel(channelGroup.channel),
+          spinConfig
         )
       );
     }
@@ -3138,7 +3143,7 @@ function updatePlotReadout(readout, angle, rows, pinned, mode) {
   readout.foreignObject.setAttribute("height", String(height));
 }
 
-function createPlotSvg(preparedPlot, row, column, mode) {
+function createPlotSvg(preparedPlot, row, column, mode, spinConfig = null) {
   const width = 380;
   const height = 340;
   const centerX = width / 2;
@@ -3182,6 +3187,14 @@ function createPlotSvg(preparedPlot, row, column, mode) {
     stroke: svgPalette.paperStroke,
     "stroke-width": 1
   }));
+
+  const plotDataLayer = createSvgElement("g", {
+    class: analyserState.unhingedMode ? "plot-data-layer plot-data-layer-unhinged" : "plot-data-layer"
+  });
+  plotDataLayer.style.transformBox = "view-box";
+  plotDataLayer.style.transformOrigin = `${centerX}px ${centerY}px`;
+  plotDataLayer.style.setProperty("--spin-duration", spinConfig && spinConfig.duration ? spinConfig.duration : "7.5s");
+  plotDataLayer.style.setProperty("--spin-delay", spinConfig && spinConfig.delay ? spinConfig.delay : "0s");
 
   const radialScale = (value) => {
     const numericValue = Number(value);
@@ -3295,7 +3308,7 @@ function createPlotSvg(preparedPlot, row, column, mode) {
       (point) => polarToCartesian(point.angle_deg, point.display_value)
     );
 
-    svg.append(createSvgElement("path", {
+    plotDataLayer.append(createSvgElement("path", {
       class: "series-line",
       d: commands.join(" "),
       fill: "none",
@@ -3313,7 +3326,7 @@ function createPlotSvg(preparedPlot, row, column, mode) {
       (point) => polarToCartesian(point.angle_deg, point.display_value)
     );
 
-    svg.append(createSvgElement("path", {
+    plotDataLayer.append(createSvgElement("path", {
       class: "series-line difference-line",
       d: commands.join(" "),
       fill: "none",
@@ -3325,7 +3338,8 @@ function createPlotSvg(preparedPlot, row, column, mode) {
   }
 
   const markerLayer = createSvgElement("g");
-  svg.append(markerLayer);
+  plotDataLayer.append(markerLayer);
+  svg.append(plotDataLayer);
 
   const readout = createPlotReadoutOverlay(width);
   updatePlotReadout(readout, null, [], false, mode);

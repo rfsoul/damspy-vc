@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>DAMSpy Visualiser</title>
-  <link rel="stylesheet" href="/src/styles.css?v=20260619a">
+  <link rel="stylesheet" href="/src/styles.css?v=20260619b">
 </head>
 <body>
   <main class="app-shell">
@@ -119,6 +119,10 @@
 
     <section id="resultsAnalyserPage" class="page" hidden>
       <div id="analyserBanner" class="banner" role="status" aria-live="polite"></div>
+      <section id="unhingedModeBanner" class="unhinged-banner" hidden aria-live="polite">
+        <div class="unhinged-banner-copy" data-text="UNHINGED MODE ACTIVE">UNHINGED MODE ACTIVE</div>
+        <div class="unhinged-banner-subcopy">Graph integrity no longer guaranteed.</div>
+      </section>
 
       <section class="hero hero-compact">
         <div class="hero-copy">
@@ -275,6 +279,6 @@
     </section>
   </main>
 
-  <script src="/src/app.js?v=20260619a"></script>
+  <script src="/src/app.js?v=20260619b"></script>
 </body>
 </html>

@@ -238,6 +238,95 @@ textarea {
   border-color: rgba(255, 216, 216, 0.25);
 }
 
+.unhinged-banner {
+  position: relative;
+  overflow: hidden;
+  padding: 1.6rem 1.8rem 1.45rem;
+  border: 2px solid rgba(255, 210, 210, 0.5);
+  border-radius: 1.5rem;
+  background:
+    linear-gradient(180deg, rgba(255, 240, 240, 0.18), rgba(255, 255, 255, 0) 38%),
+    repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.04) 0 10px, rgba(255, 255, 255, 0.01) 10px 20px),
+    linear-gradient(135deg, #5e0505 0%, #9c0f0f 36%, #f02f17 100%);
+  box-shadow:
+    0 0 0 1px rgba(255, 80, 80, 0.16),
+    0 1.2rem 2.8rem rgba(110, 0, 0, 0.35),
+    inset 0 0 2.5rem rgba(255, 255, 255, 0.06);
+  color: #fff4f4;
+  text-align: center;
+  isolation: isolate;
+  animation: unhinged-banner-flash 1.15s steps(2, end) infinite;
+}
+
+.unhinged-banner::before,
+.unhinged-banner::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.unhinged-banner::before {
+  background:
+    linear-gradient(90deg, transparent 0%, rgba(255, 255, 255, 0.18) 48%, transparent 52%),
+    linear-gradient(180deg, transparent 0%, rgba(0, 0, 0, 0.14) 100%);
+  mix-blend-mode: screen;
+  opacity: 0.55;
+  animation: unhinged-banner-scan 2.3s linear infinite;
+}
+
+.unhinged-banner::after {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.12) 0 2px, transparent 2px 8px);
+  opacity: 0.28;
+}
+
+.unhinged-banner-copy {
+  position: relative;
+  z-index: 1;
+  font-size: clamp(2.3rem, 7vw, 5.25rem);
+  line-height: 0.94;
+  font-weight: 950;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  text-shadow:
+    0 0 0.12em rgba(255, 255, 255, 0.35),
+    0 0.12em 0.4em rgba(50, 0, 0, 0.4);
+  animation: unhinged-banner-jitter 0.16s steps(2, end) infinite;
+}
+
+.unhinged-banner-copy::before,
+.unhinged-banner-copy::after {
+  content: attr(data-text);
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.unhinged-banner-copy::before {
+  color: rgba(76, 228, 255, 0.75);
+  transform: translate(-0.04em, 0.01em);
+  clip-path: inset(8% 0 56% 0);
+  animation: unhinged-banner-glitch-a 0.9s steps(2, end) infinite;
+}
+
+.unhinged-banner-copy::after {
+  color: rgba(255, 240, 80, 0.65);
+  transform: translate(0.04em, -0.01em);
+  clip-path: inset(54% 0 10% 0);
+  animation: unhinged-banner-glitch-b 0.7s steps(2, end) infinite;
+}
+
+.unhinged-banner-subcopy {
+  position: relative;
+  z-index: 1;
+  margin-top: 0.55rem;
+  font-size: clamp(0.92rem, 2.1vw, 1.2rem);
+  font-weight: 850;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: rgba(255, 239, 239, 0.92);
+}
+
 .hero,
 .panel,
 .empty-state {
@@ -971,13 +1060,6 @@ textarea {
   gap: 0.12rem;
 }
 
-.plot-card.plot-card-unhinged {
-  animation: plot-card-unhinged-spin var(--spin-duration, 7.5s) linear infinite;
-  animation-delay: var(--spin-delay, 0s);
-  transform-origin: center;
-  will-change: transform;
-}
-
 .plot-section-title {
   padding: 0.15rem 0.32rem;
   border-radius: 0.5rem;
@@ -1051,6 +1133,12 @@ textarea {
   display: block;
 }
 
+.plot-svg .plot-data-layer.plot-data-layer-unhinged {
+  animation: plot-card-unhinged-spin var(--spin-duration, 7.5s) linear infinite;
+  animation-delay: var(--spin-delay, 0s);
+  will-change: transform;
+}
+
 @keyframes plot-card-unhinged-spin {
   0% {
     transform: rotate(0deg) scale(1);
@@ -1083,9 +1171,106 @@ textarea {
   }
 }
 
+@keyframes unhinged-banner-flash {
+  0%,
+  42%,
+  100% {
+    filter: saturate(1) brightness(1);
+  }
+
+  46%,
+  52% {
+    filter: saturate(1.3) brightness(1.14);
+  }
+
+  48% {
+    filter: saturate(1.5) brightness(1.22);
+  }
+}
+
+@keyframes unhinged-banner-scan {
+  0% {
+    transform: translateX(-120%);
+  }
+
+  100% {
+    transform: translateX(120%);
+  }
+}
+
+@keyframes unhinged-banner-jitter {
+  0%,
+  100% {
+    transform: translate(0, 0);
+  }
+
+  25% {
+    transform: translate(-0.01em, 0.01em);
+  }
+
+  50% {
+    transform: translate(0.015em, -0.008em);
+  }
+
+  75% {
+    transform: translate(-0.008em, -0.012em);
+  }
+}
+
+@keyframes unhinged-banner-glitch-a {
+  0%,
+  100% {
+    transform: translate(-0.04em, 0.01em);
+  }
+
+  20% {
+    transform: translate(-0.11em, 0.03em);
+  }
+
+  40% {
+    transform: translate(0.03em, -0.015em);
+  }
+
+  60% {
+    transform: translate(-0.08em, 0.02em);
+  }
+
+  80% {
+    transform: translate(0.015em, -0.025em);
+  }
+}
+
+@keyframes unhinged-banner-glitch-b {
+  0%,
+  100% {
+    transform: translate(0.04em, -0.01em);
+  }
+
+  15% {
+    transform: translate(0.12em, -0.02em);
+  }
+
+  35% {
+    transform: translate(-0.025em, 0.015em);
+  }
+
+  65% {
+    transform: translate(0.085em, -0.03em);
+  }
+
+  85% {
+    transform: translate(-0.02em, 0.025em);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
+  .unhinged-banner,
+  .unhinged-banner::before,
+  .unhinged-banner-copy,
+  .unhinged-banner-copy::before,
+  .unhinged-banner-copy::after,
   .button-unhinged.is-active::after,
-  .plot-card.plot-card-unhinged {
+  .plot-svg .plot-data-layer.plot-data-layer-unhinged {
     animation: none;
   }
 }
