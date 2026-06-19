@@ -88,6 +88,7 @@ const analyserElements = {
   testFolderPanel: document.getElementById("testFolderPanel"),
   yamlPickerButton: document.getElementById("yamlPickerButton"),
   combinedSummaryModeButton: document.getElementById("combinedSummaryModeButton"),
+  unhingedModeButton: document.getElementById("unhingedModeButton"),
   docxSummaryButton: document.getElementById("docxSummaryButton"),
   plotSnapshotButton: document.getElementById("plotSnapshotButton"),
   summaryCsvButton: document.getElementById("summaryCsvButton"),
@@ -149,6 +150,7 @@ const analyserState = {
   measurementRoleMode: MEASUREMENT_ROLE_MODES.AUTO,
   plotMinimumDb: DEFAULT_PLOT_MIN_DB,
   showDifferenceOverlay: false,
+  unhingedMode: false,
   pickerOpen: false,
   listRequestInFlight: false,
   docxSummaryRequestInFlight: false,
@@ -1527,6 +1529,57 @@ function loadImageElement(url) {
   });
 }
 
+function blobToDataUrl(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(typeof reader.result === "string" ? reader.result : "");
+    reader.onerror = () => reject(new Error("The snapshot image could not be encoded."));
+    reader.readAsDataURL(blob);
+  });
+}
+
+async function imageSourceToDataUrl(url) {
+  if (!url || url.startsWith("data:")) {
+    return url;
+  }
+
+  const response = await fetch(url, {
+    cache: "force-cache",
+    credentials: "same-origin"
+  });
+
+  if (!response.ok) {
+    throw new Error("The snapshot image could not be loaded.");
+  }
+
+  return blobToDataUrl(await response.blob());
+}
+
+async function inlineSnapshotImages(root) {
+  const imageElements = Array.from(root.querySelectorAll("img"));
+
+  await Promise.all(
+    imageElements.map(async (image) => {
+      const source = image.currentSrc || image.getAttribute("src") || "";
+
+      if (!source) {
+        return;
+      }
+
+      const dataUrl = await imageSourceToDataUrl(source);
+      if (dataUrl) {
+        image.setAttribute("src", dataUrl);
+      }
+    })
+  );
+}
+
+function sanitiseSnapshotClone(root) {
+  for (const foreignObject of Array.from(root.querySelectorAll("foreignObject"))) {
+    foreignObject.remove();
+  }
+}
+
 function canvasToBlob(canvas, type) {
   return new Promise((resolve, reject) => {
     canvas.toBlob((blob) => {
@@ -1559,6 +1612,8 @@ async function renderNodeSnapshotBlob(sourceNode) {
   clonedNode.style.width = contentWidth + "px";
   clonedNode.style.height = contentHeight + "px";
   clonedNode.style.maxWidth = "none";
+  await inlineSnapshotImages(clonedNode);
+  sanitiseSnapshotClone(clonedNode);
   wrapper.append(clonedNode);
 
   const svg = createSvgElement("svg", {
@@ -1599,7 +1654,103 @@ async function renderNodeSnapshotBlob(sourceNode) {
   }
 }
 
-async function writePlotSnapshot(blob) {
+function buildSnapshotSectionPayload(series, dataset, mode, titleText = "") {
+  const preparedPlot = prepareSeriesForPlot(series, dataset, mode, analyserState.showDifferenceOverlay);
+
+  return {
+    title: titleText,
+    plot_peak_dbm: Number.isFinite(Number(preparedPlot.plotPeakDbm)) ? Number(preparedPlot.plotPeakDbm) : null,
+    plot_min_dbm: Number.isFinite(Number(preparedPlot.plotMinDbm)) ? Number(preparedPlot.plotMinDbm) : null,
+    global_peak_dbm: Number.isFinite(Number(preparedPlot.globalPeakDbm)) ? Number(preparedPlot.globalPeakDbm) : null,
+    y_min: Number.isFinite(Number(preparedPlot.yMin)) ? Number(preparedPlot.yMin) : null,
+    y_max: Number.isFinite(Number(preparedPlot.yMax)) ? Number(preparedPlot.yMax) : null,
+    y_label: preparedPlot.yLabel || "",
+    ring_ticks: preparedPlot.ringTicks.map((tick) => ({
+      value: Number.isFinite(Number(tick.value)) ? Number(tick.value) : null,
+      label: tick.label || "",
+      class_name: tick.className || ""
+    })),
+    series: preparedPlot.series.map((entry) => ({
+      label: formatSeriesMeasurementLabel(entry),
+      metrics: formatSeriesMetrics(entry, mode),
+      color: entry.color,
+      line_style_key: entry.lineStyleKey,
+      points: entry.points
+        .map((point) => ({
+          angle_deg: Number(point.angle_deg),
+          display_value: Number(point.display_value)
+        }))
+        .filter((point) => Number.isFinite(point.angle_deg) && Number.isFinite(point.display_value))
+    })),
+    difference_series: preparedPlot.differenceSeries.map((entry) => ({
+      label: entry.label || "",
+      metrics: "Max Delta " + formatSignedDb(entry.max_delta_db),
+      color: entry.color,
+      line_style_key: "dut-secondary",
+      points: entry.points
+        .map((point) => ({
+          angle_deg: Number(point.angle_deg),
+          display_value: Number(point.display_value)
+        }))
+        .filter((point) => Number.isFinite(point.angle_deg) && Number.isFinite(point.display_value))
+    }))
+  };
+}
+
+function buildPlotSnapshotPayload() {
+  if (!analyserState.dataset) {
+    return null;
+  }
+
+  const renderData = getRenderablePlotData(analyserState.dataset);
+  const measurementRole = resolveMeasurementRole(renderData);
+  const plots = [];
+
+  for (const plot of renderData.plots || []) {
+    const colorisedSeries = sortSeries(plot.series).map((entry, index) => ({
+      ...entry,
+      color: getChannelColor(entry.channel, index, entry.device_type),
+      lineStyleKey: getSeriesLineStyleKey(entry, measurementRole)
+    }));
+    const sections = [];
+
+    if (analyserState.overlayChannels) {
+      sections.push(buildSnapshotSectionPayload(colorisedSeries, renderData, analyserState.plotDisplayMode));
+    } else {
+      for (const channelGroup of groupSeriesByChannel(colorisedSeries)) {
+        sections.push(
+          buildSnapshotSectionPayload(
+            channelGroup.series,
+            renderData,
+            analyserState.plotDisplayMode,
+            formatCompactChannelLabel(channelGroup.channel)
+          )
+        );
+      }
+    }
+
+    plots.push({
+      polarisation: String(plot.polarisation ?? ""),
+      orientation: String(plot.orientation ?? ""),
+      sections
+    });
+  }
+
+  return {
+    title: analyserElements.title ? analyserElements.title.textContent || ANALYSER_DEFAULT_TITLE : ANALYSER_DEFAULT_TITLE,
+    subtitle: analyserElements.subtitle ? analyserElements.subtitle.textContent || "" : "",
+    mode: analyserState.plotDisplayMode,
+    overlay_channels: analyserState.overlayChannels,
+    rows: Array.isArray(renderData.rows) ? renderData.rows.map((value) => String(value)) : [],
+    columns: Array.isArray(renderData.columns) ? renderData.columns.map((value) => String(value)) : [],
+    empty_message: analyserState.plotFilterAll
+      ? "The selected measurement did not contain enough data to build the grid."
+      : "No plots matched the current filter selection.",
+    plots
+  };
+}
+
+async function writePlotSnapshot(payload) {
   const measurementIds = getActiveMeasurementIds();
 
   if (!measurementIds.length) {
@@ -1622,9 +1773,9 @@ async function writePlotSnapshot(blob) {
   return fetchJson(endpoint + params.toString(), {
     method: "POST",
     headers: {
-      "Content-Type": "image/png"
+      "Content-Type": "application/json"
     },
-    body: blob
+    body: JSON.stringify(payload)
   });
 }
 
@@ -1633,9 +1784,14 @@ async function savePlotSnapshot() {
     return;
   }
 
-  const snapshotTarget = getPlotSnapshotTarget();
+  if (!analyserState.dataset) {
+    setBanner(analyserElements.banner, "warning", "Load analyser plots before saving a snapshot.");
+    return;
+  }
 
-  if (!snapshotTarget) {
+  const payload = buildPlotSnapshotPayload();
+
+  if (!payload) {
     setBanner(analyserElements.banner, "warning", "Load analyser plots before saving a snapshot.");
     return;
   }
@@ -1645,9 +1801,7 @@ async function savePlotSnapshot() {
   analyserElements.plotSnapshotButton.textContent = "Saving Snapshot...";
 
   try {
-    await waitForRenderedImages(snapshotTarget);
-    const blob = await renderNodeSnapshotBlob(snapshotTarget);
-    const data = await writePlotSnapshot(blob);
+    const data = await writePlotSnapshot(payload);
     const relativePath = data && data.relative_path
       ? String(data.relative_path)
       : analyserState.combinedSummaryMode
@@ -2061,6 +2215,16 @@ function updatePlotModeUi() {
   updateDifferenceOverlayButton();
 }
 
+function updateUnhingedModeUi() {
+  if (!analyserElements.unhingedModeButton) {
+    return;
+  }
+
+  analyserElements.unhingedModeButton.classList.toggle("button-unhinged", true);
+  analyserElements.unhingedModeButton.classList.toggle("is-active", analyserState.unhingedMode);
+  analyserElements.unhingedModeButton.setAttribute("aria-pressed", String(analyserState.unhingedMode));
+}
+
 function updateOverlayChannelsButton() {
   if (!analyserElements.overlayChannelsButton) {
     return;
@@ -2080,6 +2244,11 @@ function renderPlotFilterControls() {
 
   analyserElements.plotFilterControls.replaceChildren();
   const available = getAvailablePlotFilterOptions(analyserState.dataset);
+
+  const label = document.createElement("div");
+  label.className = "plot-filter-label";
+  label.textContent = "Plot Filters";
+  analyserElements.plotFilterControls.append(label);
 
   const allButton = document.createElement("button");
   allButton.type = "button";
@@ -2692,6 +2861,7 @@ function createPlotCard(plot, row, column, dataset, mode, orientationImageUrl = 
   if (!plot || !plot.series.length) {
     const empty = document.createElement("div");
     empty.className = "plot-card";
+    empty.classList.toggle("plot-card-unhinged", analyserState.unhingedMode);
 
     const label = document.createElement("div");
     label.className = "plot-empty";
@@ -2702,6 +2872,10 @@ function createPlotCard(plot, row, column, dataset, mode, orientationImageUrl = 
 
   const card = document.createElement("article");
   card.className = "plot-card";
+  card.classList.toggle("plot-card-unhinged", analyserState.unhingedMode);
+  const spinSeed = Math.abs((String(row) + "::" + String(column)).split("").reduce((total, character) => total + character.charCodeAt(0), 0));
+  card.style.setProperty("--spin-duration", (6 + (spinSeed % 5) * 0.65).toFixed(2) + "s");
+  card.style.setProperty("--spin-delay", ((spinSeed % 9) * -0.22).toFixed(2) + "s");
 
   const colorisedSeries = sortSeries(plot.series).map((entry, index) => ({
     ...entry,
@@ -3300,6 +3474,7 @@ function bindAnalyserControls() {
           setSelectedMeasurementIds([analyserState.defaultMeasurementId]);
         }
         analyserState.selectedMeasurementId = analyserState.selectedMeasurementIds[0] || analyserState.selectedMeasurementId;
+        analyserState.pickerOpen = true;
       } else {
         analyserState.selectedMeasurementId = analyserState.selectedMeasurementIds[0] || analyserState.selectedMeasurementId || analyserState.defaultMeasurementId || "";
         setSelectedMeasurementIds(analyserState.selectedMeasurementId ? [analyserState.selectedMeasurementId] : []);
@@ -3357,6 +3532,17 @@ function bindAnalyserControls() {
   if (analyserElements.docxSummaryButton) {
     analyserElements.docxSummaryButton.addEventListener("click", async () => {
       await writeDocxSummary();
+    });
+  }
+
+  if (analyserElements.unhingedModeButton) {
+    analyserElements.unhingedModeButton.addEventListener("click", () => {
+      analyserState.unhingedMode = !analyserState.unhingedMode;
+      updateUnhingedModeUi();
+
+      if (analyserState.dataset) {
+        renderPlotGrid(analyserState.dataset);
+      }
     });
   }
 
@@ -3505,6 +3691,7 @@ initialiseCollapsedAnalyserPanels();
 applyTheme(readStoredTheme());
 updateMeasurementRoleUi();
 updatePlotModeUi();
+updateUnhingedModeUi();
 updateLivePlotRefreshButton();
 updateDocxSummaryButton();
 updatePlotSnapshotButton();

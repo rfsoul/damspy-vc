@@ -1919,6 +1919,428 @@ def render_analyser_summary_plots(
     return rendered
 
 
+def render_analyser_summary_plot_collage(
+    output_path: Path,
+    rendered_plots: list[tuple[str, Path]],
+) -> Path | None:
+    if Image is None or ImageDraw is None or ImageFont is None:
+        raise RuntimeError(
+            "Pillow is required to render analyser summary plot collages. "
+            f"The current server interpreter is: {sys.executable}"
+        )
+
+    if not rendered_plots:
+        return None
+
+    loaded_images: list[tuple[str, Image.Image]] = []
+
+    for caption, image_path in rendered_plots:
+        with Image.open(extended_path(image_path)) as source_image:
+            loaded_images.append((caption, source_image.convert("RGB").copy()))
+
+    columns = 1 if len(loaded_images) == 1 else 2
+    rows = math.ceil(len(loaded_images) / columns)
+    image_width = max(image.width for _, image in loaded_images)
+    image_height = max(image.height for _, image in loaded_images)
+    label_height = 34
+    margin = 24
+    gap = 22
+    page_bg = "#081018"
+    tile_bg = "#111923"
+    tile_outline = "#2c3948"
+    label_fill = "#f4f7fb"
+    label_font = load_report_font(22, True)
+    tile_width = image_width
+    tile_height = image_height + label_height
+    collage_width = margin * 2 + columns * tile_width + max(0, columns - 1) * gap
+    collage_height = margin * 2 + rows * tile_height + max(0, rows - 1) * gap
+    collage = Image.new("RGB", (collage_width, collage_height), page_bg)
+    draw = ImageDraw.Draw(collage)
+
+    for index, (caption, image) in enumerate(loaded_images):
+        column_index = index % columns
+        row_index = index // columns
+        tile_left = margin + column_index * (tile_width + gap)
+        tile_top = margin + row_index * (tile_height + gap)
+        tile_right = tile_left + tile_width
+        tile_bottom = tile_top + tile_height
+
+        draw.rounded_rectangle(
+            (tile_left - 10, tile_top - 10, tile_right + 10, tile_bottom + 10),
+            radius=22,
+            fill=tile_bg,
+            outline=tile_outline,
+            width=2,
+        )
+        collage.paste(image, (tile_left, tile_top))
+        draw.text((tile_left + 8, tile_top + image.height + 6), caption, fill=label_fill, font=label_font)
+
+    collage.save(extended_path(output_path), format="PNG")
+    return output_path
+
+
+def draw_text_right_aligned(
+    draw: ImageDraw.ImageDraw,
+    position: tuple[float, float],
+    text: str,
+    font: ImageFont.ImageFont,
+    fill: str,
+) -> None:
+    bounds = draw.textbbox((0, 0), text, font=font)
+    width = bounds[2] - bounds[0]
+    draw.text((position[0] - width, position[1]), text, font=font, fill=fill)
+
+
+def snapshot_line_pattern(line_style_key: Any) -> tuple[int, ...] | None:
+    key = str(line_style_key or "").strip().lower()
+
+    if key == "dut-secondary":
+        return (14, 8)
+
+    if key == "baseline-main":
+        return (2, 10)
+
+    if key == "baseline-secondary":
+        return (2, 10, 14, 8)
+
+    return None
+
+
+def format_snapshot_reference_text(section: dict[str, Any]) -> str:
+    plot_peak = report_dbm(section.get("plot_peak_dbm"))
+    plot_min = report_dbm(section.get("plot_min_dbm"))
+    global_peak = report_dbm(section.get("global_peak_dbm"))
+    y_label = str(section.get("y_label") or "").strip().lower()
+
+    if y_label.startswith("e/emax"):
+        return f"Max {plot_peak} | Min {plot_min}"
+
+    if global_peak != "-":
+        return f"Ref {global_peak} | Min {plot_min}"
+
+    return f"Max {plot_peak} | Min {plot_min}"
+
+
+def format_snapshot_legend_text(entry: dict[str, Any]) -> str:
+    label = str(entry.get("label") or "").strip()
+    metrics = str(entry.get("metrics") or "").strip()
+
+    if label and metrics:
+        return f"{label} | {metrics}"
+
+    return label or metrics or "-"
+
+
+def format_snapshot_polarisation_label(value: Any) -> str:
+    text = str(value or "").strip()
+    upper = text.upper()
+
+    if upper == "H":
+        return "Hpol"
+
+    if upper == "V":
+        return "Vpol"
+
+    return text or "-"
+
+
+def render_snapshot_section_image(section: dict[str, Any]) -> Image.Image:
+    if Image is None or ImageDraw is None or ImageFont is None:
+        raise RuntimeError(
+            "Pillow is required to render analyser plot snapshots. "
+            f"The current server interpreter is: {sys.executable}"
+        )
+
+    section_title = str(section.get("title") or "").strip()
+    series_entries = [entry for entry in section.get("series") or [] if (entry.get("points") or [])]
+    difference_entries = [entry for entry in section.get("difference_series") or [] if (entry.get("points") or [])]
+    legend_entries = [(entry, False) for entry in series_entries] + [(entry, True) for entry in difference_entries]
+
+    width = 540
+    title_height = 34 if section_title else 0
+    plot_panel_top = 62 + title_height
+    center_x = width // 2
+    center_y = plot_panel_top + 136
+    radius = 132
+    plot_panel_bottom = center_y + radius + 48
+    legend_top = plot_panel_bottom + 18
+    legend_row_height = 24
+    height = max(plot_panel_bottom + 64, legend_top + max(1, len(legend_entries)) * legend_row_height + 28)
+    tile_bg = "#091018"
+    paper_bg = "#111923"
+    grid = "#3b4654"
+    axis = "#768394"
+    label = "#f4f7fb"
+    muted = "#c6d7e7"
+    accent = "#ffb266"
+    title_font = load_report_font(22, True)
+    body_font = load_report_font(16)
+    small_font = load_report_font(13, True)
+    legend_font = load_report_font(14)
+
+    image = Image.new("RGB", (width, height), tile_bg)
+    draw = ImageDraw.Draw(image)
+    draw.rounded_rectangle((10, 10, width - 10, height - 10), radius=24, fill=tile_bg, outline="#2c3948", width=2)
+    draw.rounded_rectangle((26, plot_panel_top - 16, width - 26, plot_panel_bottom), radius=20, fill=paper_bg, outline="#3a4655", width=2)
+
+    if section_title:
+        draw.text((26, 20), section_title, fill=label, font=title_font)
+
+    draw_text_right_aligned(
+        draw,
+        (width - 26, 23 if section_title else 20),
+        format_snapshot_reference_text(section),
+        body_font,
+        accent,
+    )
+
+    y_min = coerce_float(section.get("y_min"))
+    y_max = coerce_float(section.get("y_max"))
+    if y_min is None:
+        y_min = 0.0
+    if y_max is None:
+        y_max = 1.0
+    scale_span = y_max - y_min
+    if abs(scale_span) < 1e-9:
+        scale_span = 1.0
+
+    def radial_scale(value: Any) -> float:
+        numeric_value = coerce_float(value)
+        if numeric_value is None:
+            return 0.0
+        ratio = (numeric_value - y_min) / scale_span
+        return radius * max(0.0, min(1.0, ratio))
+
+    def snapshot_point(angle_deg: Any, value: Any) -> tuple[float, float]:
+        angle = coerce_float(angle_deg)
+        if angle is None:
+            angle = 0.0
+        return polar_to_cartesian(center_x, center_y, radius, angle, radial_scale(value) / radius if radius else 0.0)
+
+    for angle in [0, 45, 90, 135, 180, 225, 270, 315]:
+        end = polar_to_cartesian(center_x, center_y, radius, angle, 1.0)
+        draw.line((center_x, center_y, end[0], end[1]), fill=grid, width=1)
+
+    for tick in section.get("ring_ticks") or []:
+        tick_value = coerce_float(tick.get("value"))
+        if tick_value is None:
+            continue
+        tick_radius = radial_scale(tick_value)
+        class_name = str(tick.get("class_name") or "")
+        outline = axis if class_name == "polar-outer-ring" else "#8b98a8" if class_name == "polar-reference" else grid
+        draw.ellipse(
+            (center_x - tick_radius, center_y - tick_radius, center_x + tick_radius, center_y + tick_radius),
+            outline=outline,
+            width=2 if class_name == "polar-outer-ring" else 1,
+        )
+
+        tick_label = str(tick.get("label") or "").strip()
+        if tick_label:
+            draw.text((center_x + 10, center_y - tick_radius - 16), tick_label, fill=muted, font=small_font)
+
+    for angle in [0, 45, 90, 135, 180, 225, 270, 315]:
+        label_pos = polar_to_cartesian(center_x, center_y, radius + 18, angle, 1.0)
+        draw_text_centered(draw, label_pos, f"{angle}\u00b0", small_font, label)
+
+    for entry in series_entries:
+        color = str(entry.get("color") or "#66d7ff")
+        pattern = snapshot_line_pattern(entry.get("line_style_key"))
+        raw_points = [
+            {
+                "angle_deg": coerce_float(point.get("angle_deg")),
+                "display_value": coerce_float(point.get("display_value")),
+            }
+            for point in entry.get("points") or []
+        ]
+        sorted_points = [
+            point
+            for point in sorted(raw_points, key=lambda item: item.get("angle_deg") or 0.0)
+            if point.get("angle_deg") is not None and point.get("display_value") is not None
+        ]
+        cartesian_points = [snapshot_point(point["angle_deg"], point["display_value"]) for point in sorted_points]
+
+        if should_close_polar_wrap(sorted_points) and cartesian_points:
+            cartesian_points.append(cartesian_points[0])
+
+        draw_patterned_polyline(draw, cartesian_points, hex_to_rgb(color), 4, pattern)
+
+    for entry in difference_entries:
+        color = str(entry.get("color") or "#ffb266")
+        pattern = snapshot_line_pattern(entry.get("line_style_key"))
+        raw_points = [
+            {
+                "angle_deg": coerce_float(point.get("angle_deg")),
+                "display_value": coerce_float(point.get("display_value")),
+            }
+            for point in entry.get("points") or []
+        ]
+        sorted_points = [
+            point
+            for point in sorted(raw_points, key=lambda item: item.get("angle_deg") or 0.0)
+            if point.get("angle_deg") is not None and point.get("display_value") is not None
+        ]
+        cartesian_points = [snapshot_point(point["angle_deg"], point["display_value"]) for point in sorted_points]
+
+        if should_close_polar_wrap(sorted_points) and cartesian_points:
+            cartesian_points.append(cartesian_points[0])
+
+        draw_patterned_polyline(draw, cartesian_points, hex_to_rgb(color), 3, pattern)
+
+    axis_label = str(section.get("y_label") or "").strip()
+    if axis_label:
+        draw_text_centered(draw, (center_x, plot_panel_bottom + 18), axis_label, body_font, muted)
+
+    legend_y = legend_top
+    for entry, _is_difference in legend_entries:
+        color = str(entry.get("color") or "#66d7ff")
+        pattern = snapshot_line_pattern(entry.get("line_style_key"))
+        baseline_y = legend_y + 10
+        draw_patterned_polyline(draw, [(38, baseline_y), (64, baseline_y)], hex_to_rgb(color), 4, pattern)
+        draw.text((74, legend_y), format_snapshot_legend_text(entry), fill=muted, font=legend_font)
+        legend_y += legend_row_height
+
+    return image
+
+
+def render_snapshot_placeholder(width: int, height: int, text: str) -> Image.Image:
+    image = Image.new("RGB", (width, height), "#091018")
+    draw = ImageDraw.Draw(image)
+    draw.rounded_rectangle((10, 10, width - 10, height - 10), radius=24, fill="#111923", outline="#2c3948", width=2)
+    draw_text_centered(draw, (width / 2, height / 2), text, load_report_font(18, True), "#f4f7fb")
+    return image
+
+
+def render_snapshot_cell_image(plot: dict[str, Any] | None) -> Image.Image:
+    if not plot:
+        return render_snapshot_placeholder(540, 430, "No data for this plot.")
+
+    sections = plot.get("sections") or []
+    if not sections:
+        return render_snapshot_placeholder(540, 430, "No data for this plot.")
+
+    section_images = [render_snapshot_section_image(section) for section in sections]
+    width = max(section.width for section in section_images)
+    gap = 14
+    height = sum(section.height for section in section_images) + gap * max(0, len(section_images) - 1)
+    cell = Image.new("RGB", (width, height), "#081018")
+    y_offset = 0
+
+    for section_image in section_images:
+        cell.paste(section_image, (0, y_offset))
+        y_offset += section_image.height + gap
+
+    return cell
+
+
+def render_analyser_snapshot_image(snapshot_payload: dict[str, Any]) -> Image.Image:
+    if Image is None or ImageDraw is None or ImageFont is None:
+        raise RuntimeError(
+            "Pillow is required to render analyser plot snapshots. "
+            f"The current server interpreter is: {sys.executable}"
+        )
+
+    if not isinstance(snapshot_payload, dict):
+        raise ValueError("Snapshot payload must be a JSON object")
+
+    rows = [str(value or "").strip() for value in snapshot_payload.get("rows") or [] if str(value or "").strip()]
+    columns = [str(value or "").strip() for value in snapshot_payload.get("columns") or [] if str(value or "").strip()]
+    plots = snapshot_payload.get("plots") or []
+    empty_message = str(snapshot_payload.get("empty_message") or "No plots available.")
+
+    title = str(snapshot_payload.get("title") or "Results Analyser Snapshot").strip()
+    subtitle = str(snapshot_payload.get("subtitle") or "").strip()
+    mode = str(snapshot_payload.get("mode") or "").strip()
+    overlay_channels = bool(snapshot_payload.get("overlay_channels"))
+    mode_label = "dB" if mode == "db" else "E/Emax"
+    overlay_label = "Overlay Channels Off" if not overlay_channels else "Overlay Channels On"
+    meta_text = f"Mode {mode_label} | {overlay_label}"
+
+    if not rows or not columns:
+        width = 1100
+        height = 260
+        image = Image.new("RGB", (width, height), "#081018")
+        draw = ImageDraw.Draw(image)
+        title_font = load_report_font(28, True)
+        subtitle_font = load_report_font(18)
+        draw.text((28, 24), title, fill="#f4f7fb", font=title_font)
+        if subtitle:
+            draw.text((28, 64), subtitle, fill="#c6d7e7", font=subtitle_font)
+        draw.text((28, 92), meta_text, fill="#ffb266", font=subtitle_font)
+        draw.rounded_rectangle((24, 126, width - 24, height - 24), radius=24, fill="#111923", outline="#2c3948", width=2)
+        draw_text_centered(draw, (width / 2, 184), empty_message, load_report_font(18, True), "#f4f7fb")
+        return image
+
+    plot_lookup = {
+        (str(plot.get("polarisation") or "").strip(), str(plot.get("orientation") or "").strip()): plot
+        for plot in plots
+    }
+    cell_lookup: dict[tuple[str, str], Image.Image] = {}
+    cell_width = 540
+
+    for column in columns:
+        for row in rows:
+            cell_image = render_snapshot_cell_image(plot_lookup.get((row, column)))
+            cell_lookup[(row, column)] = cell_image
+            cell_width = max(cell_width, cell_image.width)
+
+    row_heights: list[int] = []
+    for column in columns:
+        row_heights.append(max(cell_lookup[(row, column)].height for row in rows))
+
+    margin = 28
+    row_label_width = 94
+    column_gap = 18
+    row_gap = 18
+    header_height = 34
+    title_height = 88 if subtitle else 64
+    page_width = margin * 2 + row_label_width + len(rows) * cell_width + max(0, len(rows) - 1) * column_gap
+    page_height = (
+        margin * 2
+        + title_height
+        + header_height
+        + sum(row_heights)
+        + max(0, len(columns) - 1) * row_gap
+    )
+    image = Image.new("RGB", (page_width, page_height), "#081018")
+    draw = ImageDraw.Draw(image)
+    title_font = load_report_font(28, True)
+    subtitle_font = load_report_font(18)
+    header_font = load_report_font(18, True)
+
+    draw.text((margin, margin - 4), title, fill="#f4f7fb", font=title_font)
+    if subtitle:
+        draw.text((margin, margin + 34), subtitle, fill="#c6d7e7", font=subtitle_font)
+    draw.text((margin, margin + title_height - 18), meta_text, fill="#ffb266", font=subtitle_font)
+
+    grid_left = margin + row_label_width
+    header_y = margin + title_height
+
+    for row_index, row in enumerate(rows):
+        header_x = grid_left + row_index * (cell_width + column_gap) + cell_width / 2
+        draw_text_centered(draw, (header_x, header_y + 14), format_snapshot_polarisation_label(row), header_font, "#f4f7fb")
+
+    current_y = header_y + header_height
+
+    for column_index, column in enumerate(columns):
+        row_height = row_heights[column_index]
+        draw_text_centered(draw, (margin + row_label_width / 2, current_y + row_height / 2), column, header_font, "#f4f7fb")
+
+        for row_index, row in enumerate(rows):
+            cell_image = cell_lookup[(row, column)]
+            x = grid_left + row_index * (cell_width + column_gap)
+            image.paste(cell_image, (x, current_y))
+
+        current_y += row_height + row_gap
+
+    return image
+
+
+def write_rendered_snapshot(output_path: Path, snapshot_payload: dict[str, Any]) -> Path:
+    image = render_analyser_snapshot_image(snapshot_payload)
+    image.save(extended_path(output_path), format="PNG")
+    return output_path
+
+
 class DocxReportBuilder:
     def __init__(self, title: str):
         self.title = title
@@ -2102,7 +2524,15 @@ def write_analyser_docx_summary(logs_root: Path, measurement_id: str, measuremen
     builder.add_heading("Analyser Summary Plots", 1)
     with tempfile.TemporaryDirectory(prefix="damspy_docx_") as temp_dir_name:
         temp_output_dir = Path(temp_dir_name)
-        for caption, image_path in render_analyser_summary_plots(temp_output_dir, dataset, resolved_measurement_role):
+        rendered_plots = render_analyser_summary_plots(temp_output_dir, dataset, resolved_measurement_role)
+        collage_path = render_analyser_summary_plot_collage(
+            temp_output_dir / "summary_overview.png",
+            rendered_plots,
+        )
+        if collage_path is not None:
+            builder.add_image(collage_path, "Analyser plot overview", max_width_in=6.2)
+
+        for caption, image_path in rendered_plots:
             builder.add_image(image_path, f"Analyser plot: {caption}", max_width_in=6.1)
 
         builder.write(output_path)
@@ -2213,7 +2643,15 @@ def write_combined_analyser_docx_summary(
     builder.add_heading("Combined Summary Plots", 1)
     with tempfile.TemporaryDirectory(prefix="damspy_combined_docx_") as temp_dir_name:
         temp_output_dir = Path(temp_dir_name)
-        for caption, image_path in render_analyser_summary_plots(temp_output_dir, combined_dataset, resolved_measurement_role):
+        rendered_plots = render_analyser_summary_plots(temp_output_dir, combined_dataset, resolved_measurement_role)
+        collage_path = render_analyser_summary_plot_collage(
+            temp_output_dir / "combined_summary_overview.png",
+            rendered_plots,
+        )
+        if collage_path is not None:
+            builder.add_image(collage_path, "Combined plot overview", max_width_in=6.2)
+
+        for caption, image_path in rendered_plots:
             builder.add_image(image_path, f"Combined plot: {caption}", max_width_in=6.1)
 
         builder.write(output_path)
@@ -2232,6 +2670,16 @@ def write_analyser_plot_snapshot(logs_root: Path, measurement_id: str, image_byt
     return output_path
 
 
+def write_rendered_analyser_plot_snapshot(
+    logs_root: Path,
+    measurement_id: str,
+    snapshot_payload: dict[str, Any],
+) -> Path:
+    measurement_dir, _, _ = resolve_measurement(logs_root, measurement_id)
+    output_path = measurement_dir / ANALYSER_SNAPSHOT_FILENAME
+    return write_rendered_snapshot(output_path, snapshot_payload)
+
+
 def write_combined_analyser_plot_snapshot(logs_root: Path, measurement_ids: list[str], image_bytes: bytes) -> Path:
     ordered_measurement_ids = dedupe_measurement_ids(measurement_ids)
 
@@ -2246,6 +2694,22 @@ def write_combined_analyser_plot_snapshot(logs_root: Path, measurement_ids: list
     output_path = output_measurement_dir / combined_snapshot_filename()
     output_path.write_bytes(image_bytes)
     return output_path
+
+
+def write_rendered_combined_analyser_plot_snapshot(
+    logs_root: Path,
+    measurement_ids: list[str],
+    snapshot_payload: dict[str, Any],
+) -> Path:
+    ordered_measurement_ids = dedupe_measurement_ids(measurement_ids)
+
+    if not ordered_measurement_ids:
+        raise ValueError("At least one measurement_id is required")
+
+    output_measurement_id = latest_measurement_id(logs_root, ordered_measurement_ids)
+    output_measurement_dir, _, _ = resolve_measurement(logs_root, output_measurement_id)
+    output_path = output_measurement_dir / combined_snapshot_filename()
+    return write_rendered_snapshot(output_path, snapshot_payload)
 
 
 def load_measurement_dataset(logs_root: Path, measurement_id: str) -> dict[str, Any]:
@@ -2622,6 +3086,24 @@ class WOYMRequestHandler(SimpleHTTPRequestHandler):
 
         return image_bytes
 
+    def read_json_request_body(self) -> dict[str, Any]:
+        body = self.read_request_body()
+
+        if not body:
+            raise ValueError("Snapshot payload is required")
+
+        try:
+            payload = json.loads(body.decode("utf-8"))
+        except UnicodeDecodeError as exc:
+            raise ValueError("Snapshot payload must be UTF-8 JSON") from exc
+        except json.JSONDecodeError as exc:
+            raise ValueError("Snapshot payload must be valid JSON") from exc
+
+        if not isinstance(payload, dict):
+            raise ValueError("Snapshot payload must be a JSON object")
+
+        return payload
+
     def handle_yaml_list(self) -> None:
         query = parse_qs(urlsplit(self.path).query)
         scope = query.get("scope", [MEASUREMENT_SCOPE_BEST])[0]
@@ -2766,8 +3248,13 @@ class WOYMRequestHandler(SimpleHTTPRequestHandler):
             return
 
         try:
-            image_bytes = self.read_png_request_body()
-            output_path = write_analyser_plot_snapshot(self.logs_root, measurement_id, image_bytes)
+            content_type = self.headers.get("Content-Type", "").split(";", 1)[0].strip().lower()
+            if content_type == "application/json":
+                snapshot_payload = self.read_json_request_body()
+                output_path = write_rendered_analyser_plot_snapshot(self.logs_root, measurement_id, snapshot_payload)
+            else:
+                image_bytes = self.read_png_request_body()
+                output_path = write_analyser_plot_snapshot(self.logs_root, measurement_id, image_bytes)
         except PermissionError as exc:
             self.send_json(
                 {
@@ -2852,8 +3339,17 @@ class WOYMRequestHandler(SimpleHTTPRequestHandler):
             return
 
         try:
-            image_bytes = self.read_png_request_body()
-            output_path = write_combined_analyser_plot_snapshot(self.logs_root, measurement_ids, image_bytes)
+            content_type = self.headers.get("Content-Type", "").split(";", 1)[0].strip().lower()
+            if content_type == "application/json":
+                snapshot_payload = self.read_json_request_body()
+                output_path = write_rendered_combined_analyser_plot_snapshot(
+                    self.logs_root,
+                    measurement_ids,
+                    snapshot_payload,
+                )
+            else:
+                image_bytes = self.read_png_request_body()
+                output_path = write_combined_analyser_plot_snapshot(self.logs_root, measurement_ids, image_bytes)
         except PermissionError as exc:
             self.send_json(
                 {

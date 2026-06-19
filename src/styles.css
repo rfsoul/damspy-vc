@@ -805,6 +805,30 @@ textarea {
   overflow: visible;
 }
 
+.button-unhinged {
+  position: relative;
+  overflow: hidden;
+}
+
+.button-unhinged.is-active {
+  border-color: rgba(255, 178, 102, 0.5);
+  background:
+    linear-gradient(135deg, rgba(255, 178, 102, 0.18), rgba(102, 215, 255, 0.14)),
+    var(--button-ghost-active-bg);
+  color: var(--accent-strong);
+  box-shadow: 0 0 0 1px rgba(255, 178, 102, 0.18), 0 0.75rem 1.8rem rgba(0, 0, 0, 0.2);
+}
+
+.button-unhinged.is-active::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(120deg, transparent 12%, rgba(255, 255, 255, 0.22) 50%, transparent 88%);
+  transform: translateX(-135%);
+  animation: unhinged-button-sheen 2.4s linear infinite;
+  pointer-events: none;
+}
+
 .plot-section-controls {
   display: flex;
   flex-wrap: wrap;
@@ -862,6 +886,16 @@ textarea {
   display: flex;
   flex-wrap: wrap;
   gap: 0.5rem;
+  align-items: center;
+}
+
+.plot-filter-label {
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  margin-right: 0.15rem;
 }
 
 .plot-panel {
@@ -937,6 +971,13 @@ textarea {
   gap: 0.12rem;
 }
 
+.plot-card.plot-card-unhinged {
+  animation: plot-card-unhinged-spin var(--spin-duration, 7.5s) linear infinite;
+  animation-delay: var(--spin-delay, 0s);
+  transform-origin: center;
+  will-change: transform;
+}
+
 .plot-section-title {
   padding: 0.15rem 0.32rem;
   border-radius: 0.5rem;
@@ -1008,6 +1049,45 @@ textarea {
   border-radius: 0.95rem;
   background: var(--plot-svg-bg);
   display: block;
+}
+
+@keyframes plot-card-unhinged-spin {
+  0% {
+    transform: rotate(0deg) scale(1);
+  }
+
+  20% {
+    transform: rotate(72deg) scale(1.01);
+  }
+
+  50% {
+    transform: rotate(180deg) scale(1.02);
+  }
+
+  80% {
+    transform: rotate(288deg) scale(1.01);
+  }
+
+  100% {
+    transform: rotate(360deg) scale(1);
+  }
+}
+
+@keyframes unhinged-button-sheen {
+  0% {
+    transform: translateX(-135%);
+  }
+
+  100% {
+    transform: translateX(135%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .button-unhinged.is-active::after,
+  .plot-card.plot-card-unhinged {
+    animation: none;
+  }
 }
 
 .plot-svg .polar-paper {
