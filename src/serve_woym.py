@@ -65,6 +65,8 @@ PREFERRED_DEFAULT_MEASUREMENT_ID = (
     "hendrix-tx_V3-04F_002-bodyworn-Ori_ori1_ori2-Ch_0_40_80-"
     "Pwr_10-Pol_H_V-Step_2deg-RxAnt_Horn_WR340"
 )
+MEASUREMENT_DEFAULT_STEM = "1_meas_azimuth"
+MEASUREMENT_YAML_SUFFIXES = {".yaml", ".yml"}
 
 
 def parse_args() -> argparse.Namespace:
@@ -122,6 +124,88 @@ def path_is_file(path: Path) -> bool:
 def iter_directory(path: Path) -> list[os.DirEntry[str]]:
     with os.scandir(extended_path(path)) as entries:
         return list(entries)
+
+
+def list_measurement_yaml_paths_from_entries(measurement_dir: Path, entries: list[os.DirEntry[str]]) -> list[Path]:
+    yaml_paths: list[Path] = []
+
+    for entry in entries:
+        if not entry.is_file():
+            continue
+
+        entry_path = measurement_dir / entry.name
+        if entry_path.suffix.lower() not in MEASUREMENT_YAML_SUFFIXES:
+            continue
+
+        yaml_paths.append(entry_path)
+
+    yaml_paths.sort(
+        key=lambda path: (
+            0 if path.stem == MEASUREMENT_DEFAULT_STEM else 1,
+            path.name.lower(),
+        )
+    )
+    return yaml_paths
+
+
+def list_measurement_yaml_paths(measurement_dir: Path) -> list[Path]:
+    if not path_is_dir(measurement_dir):
+        return []
+
+    try:
+        entries = iter_directory(measurement_dir)
+    except OSError:
+        return []
+
+    return list_measurement_yaml_paths_from_entries(measurement_dir, entries)
+
+
+def resolve_measurement_assets(
+    measurement_dir: Path,
+    yaml_candidates: list[Path] | None = None,
+) -> tuple[Path | None, Path]:
+    candidates = yaml_candidates if yaml_candidates is not None else list_measurement_yaml_paths(measurement_dir)
+    legacy_results_dir = measurement_dir / MEASUREMENT_DEFAULT_STEM
+
+    if not candidates:
+        return None, legacy_results_dir
+
+    candidate_pairs: list[tuple[int, float, int, str, Path, Path]] = []
+    legacy_results_exists = path_is_dir(legacy_results_dir)
+
+    for yaml_path in candidates:
+        paired_results_dir = measurement_dir / yaml_path.stem
+        paired_results_exists = path_is_dir(paired_results_dir)
+
+        if paired_results_exists:
+            results_dir = paired_results_dir
+            score = 4
+        elif legacy_results_exists:
+            results_dir = legacy_results_dir
+            score = 3
+        else:
+            results_dir = paired_results_dir
+            score = 2 if yaml_path.stem == MEASUREMENT_DEFAULT_STEM else 1
+
+        try:
+            yaml_mtime = os.stat(extended_path(yaml_path)).st_mtime
+        except OSError:
+            yaml_mtime = 0.0
+
+        candidate_pairs.append(
+            (
+                score,
+                yaml_mtime,
+                1 if yaml_path.stem == MEASUREMENT_DEFAULT_STEM else 0,
+                yaml_path.name.lower(),
+                yaml_path,
+                results_dir,
+            )
+        )
+
+    candidate_pairs.sort(key=lambda item: (-item[0], -item[1], -item[2], item[3]))
+    _, _, _, _, yaml_path, results_dir = candidate_pairs[0]
+    return yaml_path, results_dir
 
 
 def read_json_file(path: Path) -> dict[str, Any]:
@@ -625,8 +709,7 @@ def expected_measurement_count(yaml_path: Path) -> int:
     return expected_count
 
 
-def build_measurement_completion(measurement_dir: Path, yaml_path: Path) -> dict[str, Any]:
-    results_dir = measurement_dir / "1_meas_azimuth"
+def build_measurement_completion(results_dir: Path, yaml_path: Path) -> dict[str, Any]:
     expected_count = expected_measurement_count(yaml_path)
 
     if not path_is_dir(results_dir):
@@ -883,15 +966,18 @@ def iter_measurement_directories(logs_root: Path) -> list[Path]:
         except OSError:
             continue
 
-        yaml_path = current_dir / "1_meas_azimuth.yaml"
-        if path_is_file(yaml_path):
+        yaml_candidates = list_measurement_yaml_paths_from_entries(current_dir, entries)
+        yaml_path, _ = resolve_measurement_assets(current_dir, yaml_candidates)
+        if yaml_path is not None:
             discovered.append(current_dir)
+
+        result_dir_names = {MEASUREMENT_DEFAULT_STEM, *(yaml_candidate.stem for yaml_candidate in yaml_candidates)}
 
         for entry in entries:
             if not entry.is_dir():
                 continue
 
-            if entry.name == "1_meas_azimuth":
+            if entry.name in result_dir_names:
                 continue
 
             pending.append(current_dir / entry.name)
@@ -900,9 +986,9 @@ def iter_measurement_directories(logs_root: Path) -> list[Path]:
 
 
 def measurement_manifest(logs_root: Path, measurement_dir: Path) -> dict[str, Any] | None:
-    yaml_path = measurement_dir / "1_meas_azimuth.yaml"
+    yaml_path, results_dir = resolve_measurement_assets(measurement_dir)
 
-    if not path_is_dir(measurement_dir) or not path_is_file(yaml_path):
+    if not path_is_dir(measurement_dir) or yaml_path is None or not path_is_file(yaml_path):
         return None
 
     measurement_id = display_path(measurement_dir, logs_root)
@@ -913,7 +999,7 @@ def measurement_manifest(logs_root: Path, measurement_dir: Path) -> dict[str, An
         os.stat(extended_path(yaml_path)).st_mtime,
     )
     measurement_timestamp = measurement_name_timestamp(measurement_id)
-    completion = build_measurement_completion(measurement_dir, yaml_path)
+    completion = build_measurement_completion(results_dir, yaml_path)
 
     return {
         "measurement_id": measurement_id,
@@ -968,8 +1054,9 @@ def resolve_measurement(logs_root: Path, measurement_id: str) -> tuple[Path, Pat
     except ValueError as exc:
         raise ValueError("measurement_id is outside the DAMspy logs root") from exc
 
-    yaml_path = measurement_dir / "1_meas_azimuth.yaml"
-    results_dir = measurement_dir / "1_meas_azimuth"
+    yaml_path, results_dir = resolve_measurement_assets(measurement_dir)
+    if yaml_path is None:
+        yaml_path = measurement_dir / f"{MEASUREMENT_DEFAULT_STEM}.yaml"
     return measurement_dir, yaml_path, results_dir
 
 
@@ -1554,9 +1641,7 @@ def write_measurement_summary_csv(logs_root: Path) -> Path:
 
         for measurement in measurements:
             row_number = 1
-            measurement_dir = logs_root / measurement["measurement_id"]
-            yaml_path = measurement_dir / "1_meas_azimuth.yaml"
-            results_dir = measurement_dir / "1_meas_azimuth"
+            measurement_dir, yaml_path, results_dir = resolve_measurement(logs_root, str(measurement["measurement_id"]))
             subfolder_names = list_measurement_subfolders(results_dir)
             subfolder_rows = build_expected_subfolder_rows(measurement.get("measurement_name", ""), yaml_path, subfolder_names)
 

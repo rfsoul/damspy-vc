@@ -1861,12 +1861,12 @@ async function loadMeasurementList(options = {}) {
         await loadMeasurementDataset(analyserState.selectedMeasurementId);
       }
     } else if (!analyserState.measurements.length) {
-      renderAnalyserEmpty("No 1_meas_azimuth results were found under DAMspy-core.");
+      renderAnalyserEmpty("No analyser-ready measurement YAMLs were found under DAMspy-core.");
     }
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";
     setBanner(analyserElements.banner, "error", "Unable to load the available YAML files: " + message);
-    renderAnalyserEmpty("Unable to discover 1_meas_azimuth.yaml files.");
+    renderAnalyserEmpty("Unable to discover measurement YAML files.");
   } finally {
     analyserState.listRequestInFlight = false;
   }
@@ -2335,7 +2335,7 @@ function updateCombinedSummaryModeUi() {
   if (analyserElements.yamlPickerButton) {
     analyserElements.yamlPickerButton.textContent = analyserState.combinedSummaryMode
       ? "Choose & Style YAMLs"
-      : "Choose 1_meas_azimuth.yaml";
+      : "Choose YAML";
   }
 
   if (analyserElements.yamlApplyButton) {
