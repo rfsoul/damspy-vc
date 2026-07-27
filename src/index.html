@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>DAMSpy Visualiser</title>
-  <link rel="stylesheet" href="/src/styles.css?v=20260619e">
+  <link rel="stylesheet" href="/src/styles.css?v=20260727a">
 </head>
 <body>
   <main class="app-shell">
@@ -272,6 +272,19 @@
           <p id="deviceRoleHint" class="plot-control-note">Auto defaults DUT for Hendrix/RXCC and Baseline for Wireless Pro.</p>
         </div>
 
+        <details id="combinedPlotSummaryPanel" class="panel collapsible-panel combined-plot-summary-panel" hidden>
+          <summary class="collapsible-summary">
+            <div class="collapsible-title-group">
+              <h2 class="section-label">Selected Plot Summary</h2>
+              <p class="panel-description">Peak EIRP for the visible combined-summary plots, grouped by DUT serial number.</p>
+            </div>
+          </summary>
+
+          <div class="collapsible-content">
+            <div id="combinedPlotSummaryContent" class="combined-plot-summary-content"></div>
+          </div>
+        </details>
+
         <div id="plotGridContainer" class="plot-grid-container">
           <div class="plot-grid-empty">Loading analyser data...</div>
         </div>
@@ -279,6 +292,6 @@
     </section>
   </main>
 
-  <script src="/src/app.js?v=20260619e"></script>
+  <script src="/src/app.js?v=20260727a"></script>
 </body>
 </html>

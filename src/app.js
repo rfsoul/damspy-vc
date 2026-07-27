@@ -87,6 +87,7 @@ const analyserElements = {
   subtitle: document.getElementById("analyserSubtitle"),
   measurementDetailsPanel: document.getElementById("measurementDetailsPanel"),
   testFolderPanel: document.getElementById("testFolderPanel"),
+  combinedPlotSummaryPanel: document.getElementById("combinedPlotSummaryPanel"),
   yamlPickerButton: document.getElementById("yamlPickerButton"),
   combinedSummaryModeButton: document.getElementById("combinedSummaryModeButton"),
   unhingedModeButton: document.getElementById("unhingedModeButton"),
@@ -109,6 +110,7 @@ const analyserElements = {
   testFolderParentValue: document.getElementById("testFolderParentValue"),
   measurementUpdatedAt: document.getElementById("measurementUpdatedAt"),
   testFolderList: document.getElementById("testFolderList"),
+  combinedPlotSummaryContent: document.getElementById("combinedPlotSummaryContent"),
   plotGridContainer: document.getElementById("plotGridContainer"),
   plotModeDescription: document.getElementById("plotModeDescription"),
   plotFolderScopeSelect: document.getElementById("plotFolderScopeSelect"),
@@ -2179,6 +2181,12 @@ function renderAnalyserEmpty(message) {
   analyserElements.testFolderParentValue.textContent = MISSING;
   analyserElements.measurementUpdatedAt.textContent = MISSING;
   analyserElements.testFolderList.replaceChildren();
+  if (analyserElements.combinedPlotSummaryPanel) {
+    analyserElements.combinedPlotSummaryPanel.hidden = true;
+  }
+  if (analyserElements.combinedPlotSummaryContent) {
+    analyserElements.combinedPlotSummaryContent.replaceChildren();
+  }
   analyserElements.plotGridContainer.replaceChildren();
   updateMeasurementRoleUi();
   updateDocxSummaryButton();
@@ -2541,6 +2549,85 @@ function normalisePolarAngle(value) {
   return wrapped === 360 ? 0 : wrapped;
 }
 
+function calculateTotalAboveThresholdSpanDegrees(points, thresholdDbm) {
+  const numericThreshold = Number(thresholdDbm);
+  if (!Number.isFinite(numericThreshold) || !Array.isArray(points) || points.length < 2) {
+    return Number.NaN;
+  }
+
+  const sampleMap = new Map();
+
+  for (const point of points) {
+    const angle = normalisePolarAngle(point && point.angle_deg);
+    const value = Number(point && point.rx_peak_dbm);
+
+    if (!Number.isFinite(angle) || !Number.isFinite(value)) {
+      continue;
+    }
+
+    const key = angle.toFixed(6);
+    const existingValue = sampleMap.get(key);
+    if (!Number.isFinite(existingValue) || value > existingValue) {
+      sampleMap.set(key, value);
+    }
+  }
+
+  const samples = Array.from(sampleMap.entries())
+    .map(([angleText, value]) => ({
+      angle: Number(angleText),
+      value
+    }))
+    .sort((left, right) => left.angle - right.angle);
+
+  if (samples.length < 2) {
+    return Number.NaN;
+  }
+
+  let totalSpan = 0;
+
+  for (let index = 0; index < samples.length; index += 1) {
+    const current = samples[index];
+    const next = index === samples.length - 1
+      ? { angle: samples[0].angle + 360, value: samples[0].value }
+      : samples[index + 1];
+
+    const deltaAngle = next.angle - current.angle;
+    if (!(deltaAngle > 0)) {
+      continue;
+    }
+
+    const currentAbove = current.value >= numericThreshold;
+    const nextAbove = next.value >= numericThreshold;
+
+    if (currentAbove && nextAbove) {
+      totalSpan += deltaAngle;
+      continue;
+    }
+
+    if (current.value === next.value) {
+      continue;
+    }
+
+    const crossingRatio = (numericThreshold - current.value) / (next.value - current.value);
+    if (!(crossingRatio >= 0 && crossingRatio <= 1)) {
+      continue;
+    }
+
+    const crossingAngle = current.angle + crossingRatio * deltaAngle;
+
+    if (currentAbove && !nextAbove) {
+      totalSpan += crossingAngle - current.angle;
+      continue;
+    }
+
+    if (!currentAbove && nextAbove) {
+      totalSpan += next.angle - crossingAngle;
+    }
+  }
+
+  return totalSpan;
+}
+
 function getPlotPeakDbm(series) {
   const peaks = series
     .flatMap((entry) => entry.points.map((point) => Number(point.rx_peak_dbm)))
@@ -2777,6 +2864,7 @@ function prepareSeriesForPlot(series, dataset, mode, showDifferenceOverlay = fal
 function renderPlotGrid(data) {
   analyserElements.plotGridContainer.replaceChildren();
   const renderData = getRenderablePlotData(data);
+  renderCombinedPlotSummary(data, renderData);
 
   if (!renderData.rows.length || !renderData.columns.length) {
     const empty = document.createElement("div");
@@ -2826,6 +2914,230 @@ function renderPlotGrid(data) {
 
   analyserElements.plotGridContainer.append(grid);
   updatePlotSnapshotButton();
+}
+
+function getPlotSummaryColumnKey(plot, series) {
+  return [
+    String(series.channel ?? "").trim(),
+    String(plot.polarisation ?? "").trim(),
+    String(plot.orientation ?? "").trim(),
+    String(series.antenna ?? "").trim(),
+    String(series.power_level ?? "").trim(),
+    String(series.frequency_hz ?? "").trim()
+  ].join("::");
+}
+
+function buildPlotSummaryHeaderLabel(column, includeDetail) {
+  const parts = [
+    formatCompactChannelLabel(column.channel),
+    formatPolarisationLabel(column.polarisation),
+    String(column.orientation ?? "").trim()
+  ].filter((value) => value && value !== MISSING);
+
+  if (includeDetail) {
+    const antennaLabel = formatAntennaLabel(column.antenna, column);
+    const powerLabel = formatPowerLevel(column.power_level);
+    const frequencyLabel = formatFrequency(column.frequency_hz);
+
+    if (antennaLabel) {
+      parts.push(antennaLabel);
+    }
+    if (powerLabel) {
+      parts.push(powerLabel);
+    }
+    if (frequencyLabel !== MISSING) {
+      parts.push(frequencyLabel);
+    }
+  }
+
+  return parts.join(" | ");
+}
+
+function buildCombinedPlotSummaryModel(data, renderData) {
+  if (!data || !data.combined || !renderData || !Array.isArray(renderData.plots) || !renderData.plots.length) {
+    return null;
+  }
+
+  const sourceMeasurements = Array.isArray(data.source_measurements) ? data.source_measurements : [];
+  const baseColumnCounts = new Map();
+  const columnLookup = new Map();
+  const cellLookup = new Map();
+  const visibleMeasurementIds = new Set();
+
+  for (const plot of renderData.plots) {
+    for (const series of sortSeries(plot.series || [])) {
+      const columnKey = getPlotSummaryColumnKey(plot, series);
+      const baseKey = [
+        String(series.channel ?? "").trim(),
+        String(plot.polarisation ?? "").trim(),
+        String(plot.orientation ?? "").trim()
+      ].join("::");
+
+      if (!columnLookup.has(columnKey)) {
+        columnLookup.set(columnKey, {
+          key: columnKey,
+          baseKey,
+          channel: series.channel,
+          polarisation: plot.polarisation,
+          orientation: plot.orientation,
+          antenna: series.antenna,
+          power_level: series.power_level,
+          frequency_hz: series.frequency_hz
+        });
+        baseColumnCounts.set(baseKey, (baseColumnCounts.get(baseKey) || 0) + 1);
+      }
+
+      const measurementId = String(series.source_measurement_id ?? "").trim();
+      if (measurementId) {
+        visibleMeasurementIds.add(measurementId);
+
+        const eirpValue = Number(series.eirp_dbm);
+        const spanValue = calculateTotalAboveThresholdSpanDegrees(series.points || [], Number(series.peak_dbm) - 3);
+        if (Number.isFinite(eirpValue)) {
+          const cellKey = measurementId + "::" + columnKey;
+          const existingCell = cellLookup.get(cellKey);
+          if (!existingCell || !Number.isFinite(existingCell.eirpDbm) || eirpValue > existingCell.eirpDbm) {
+            cellLookup.set(cellKey, {
+              eirpDbm: eirpValue,
+              spanDeg: Number.isFinite(spanValue) ? spanValue : Number.NaN
+            });
+          }
+        }
+      }
+    }
+  }
+
+  const columns = Array.from(columnLookup.values()).map((column) => ({
+    ...column,
+    label: buildPlotSummaryHeaderLabel(column, (baseColumnCounts.get(column.baseKey) || 0) > 1)
+  }));
+
+  if (!columns.length || !visibleMeasurementIds.size) {
+    return null;
+  }
+
+  const rows = [];
+  for (const measurement of sourceMeasurements) {
+    const measurementId = String(measurement && measurement.measurement_id ? measurement.measurement_id : "").trim();
+    if (measurementId && visibleMeasurementIds.has(measurementId)) {
+      rows.push(measurement);
+      visibleMeasurementIds.delete(measurementId);
+    }
+  }
+
+  for (const measurementId of Array.from(visibleMeasurementIds).sort((left, right) => naturalSortValue(left).localeCompare(naturalSortValue(right)))) {
+    rows.push({
+      measurement_id: measurementId,
+      measurement_name: measurementId
+    });
+  }
+
+  return {
+    columns,
+    rows,
+    cellLookup
+  };
+}
+
+function renderCombinedPlotSummary(data, renderData) {
+  if (!analyserElements.combinedPlotSummaryPanel || !analyserElements.combinedPlotSummaryContent) {
+    return;
+  }
+
+  analyserElements.combinedPlotSummaryContent.replaceChildren();
+  const model = buildCombinedPlotSummaryModel(data, renderData);
+
+  if (!model) {
+    analyserElements.combinedPlotSummaryPanel.hidden = true;
+    return;
+  }
+
+  analyserElements.combinedPlotSummaryPanel.hidden = false;
+
+  const note = document.createElement("p");
+  note.className = "plot-summary-note";
+  note.textContent = "Peak EIRP values reflect the plots currently visible under the active filters.";
+
+  const wrap = document.createElement("div");
+  wrap.className = "plot-summary-table-wrap";
+
+  const table = document.createElement("table");
+  table.className = "plot-summary-table";
+
+  const thead = document.createElement("thead");
+  const headerRow = document.createElement("tr");
+  const serialHeader = document.createElement("th");
+  serialHeader.scope = "col";
+  serialHeader.className = "plot-summary-serial-cell plot-summary-corner-cell";
+  serialHeader.textContent = "Serial Number";
+  headerRow.append(serialHeader);
+
+  for (const column of model.columns) {
+    const header = document.createElement("th");
+    header.scope = "col";
+    header.textContent = column.label;
+    header.title = column.label;
+    headerRow.append(header);
+  }
+
+  thead.append(headerRow);
+  table.append(thead);
+
+  const tbody = document.createElement("tbody");
+
+  for (const measurement of model.rows) {
+    const measurementId = String(measurement && measurement.measurement_id ? measurement.measurement_id : "").trim();
+    const row = document.createElement("tr");
+    const serialCell = document.createElement("th");
+    serialCell.scope = "row";
+    serialCell.className = "plot-summary-serial-cell";
+
+    const serialValue = document.createElement("div");
+    serialValue.className = "plot-summary-serial-value";
+    serialValue.textContent = measurement && measurement.dut_serial_number
+      ? String(measurement.dut_serial_number)
+      : measurement && measurement.measurement_name
+        ? String(measurement.measurement_name)
+        : MISSING;
+
+    const serialMeta = document.createElement("div");
+    serialMeta.className = "plot-summary-serial-meta";
+    serialMeta.textContent = measurement && measurement.measurement_label
+      ? String(measurement.measurement_label)
+      : measurement && measurement.yaml_relative_path
+        ? String(measurement.yaml_relative_path)
+        : "";
+
+    serialCell.append(serialValue);
+    if (serialMeta.textContent) {
+      serialCell.append(serialMeta);
+    }
+    row.append(serialCell);
+
+    for (const column of model.columns) {
+      const cell = document.createElement("td");
+      cell.className = "plot-summary-metric-cell";
+      const value = model.cellLookup.get(measurementId + "::" + column.key);
+
+      const eirpLine = document.createElement("div");
+      eirpLine.className = "plot-summary-primary-metric";
+      eirpLine.textContent = "Peak EIRP " + formatDbm(value && value.eirpDbm);
+
+      const spanLine = document.createElement("div");
+      spanLine.className = "plot-summary-secondary-metric";
+      spanLine.textContent = "Total >-3 dB Span "
+        + (value && Number.isFinite(value.spanDeg) ? formatDegrees(value.spanDeg) : MISSING);
+
+      cell.append(eirpLine, spanLine);
+      row.append(cell);
+    }
+
+    tbody.append(row);
+  }
+
+  table.append(tbody);
+  wrap.append(table);
+  analyserElements.combinedPlotSummaryContent.append(note, wrap);
 }
 
 function groupSeriesByChannel(series) {

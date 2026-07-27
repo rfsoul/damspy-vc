@@ -1149,6 +1149,8 @@ def load_combined_measurement_dataset(logs_root: Path, measurement_ids: list[str
             {
                 "measurement_id": dataset.get("measurement_id"),
                 "measurement_name": dataset.get("measurement_name"),
+                "measurement_label": short_measurement_label(dataset.get("measurement_name")),
+                "dut_serial_number": dataset.get("dut_serial_number"),
                 "yaml_relative_path": dataset.get("yaml_relative_path"),
                 "updated_at": dataset.get("updated_at"),
                 "folder_count": len(dataset.get("folders") or []),
