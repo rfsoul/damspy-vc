@@ -301,6 +301,14 @@ def parse_yaml_scalar(raw_value: str) -> Any:
     return value
 
 
+def normalise_yaml_lookup_key(value: Any) -> str:
+    text = str(value or "").strip().lower()
+    if not text:
+        return ""
+
+    return re.sub(r"[^a-z0-9]+", "_", text).strip("_")
+
+
 def coerce_float(value: Any) -> float | None:
     if value is None:
         return None
@@ -513,6 +521,225 @@ def build_plot_summary_rows(dataset: dict[str, Any]) -> list[list[str]]:
     return rows
 
 
+def format_polarisation_label(value: Any) -> str:
+    text = str(value or "").strip().upper()
+    if text == "H":
+        return "Hpol"
+    if text == "V":
+        return "Vpol"
+    return str(value or "").strip() or "-"
+
+
+def format_summary_channel_label(value: Any) -> str:
+    text = str(value or "").strip()
+    return f"ch{text}" if text else "-"
+
+
+def compact_measurement_identity_label(measurement: dict[str, Any]) -> str:
+    measurement_name = str(measurement.get("measurement_name") or "").strip()
+    measurement_name = re.sub(r"^Antenna_Pattern_Measurement-", "", measurement_name)
+    folder_match = re.search(r"\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}-(.+?)-Ori(?:_|-|$)", measurement_name, re.IGNORECASE)
+
+    if folder_match is not None:
+        folder_segment = folder_match.group(1).strip()
+        tokens = [token for token in folder_segment.split("_") if token]
+        if len(tokens) >= 3 and re.match(r"^sn", tokens[2], re.IGNORECASE):
+            return "_".join(tokens[:3])
+        if folder_segment:
+            return folder_segment
+
+    hardware_config = str(measurement.get("dut_hardware_config") or "").strip()
+    serial_number = str(measurement.get("dut_serial_number") or "").strip()
+    if hardware_config and serial_number:
+        return f"{hardware_config}_{serial_number}"
+
+    if hardware_config or serial_number:
+        return hardware_config or serial_number
+
+    measurement_label = str(measurement.get("measurement_label") or "").strip()
+    if measurement_label:
+        return measurement_label
+
+    yaml_relative_path = str(measurement.get("yaml_relative_path") or "").strip()
+    if yaml_relative_path:
+        return re.sub(r"\.[^.]+$", "", Path(yaml_relative_path).name)
+
+    return "-"
+
+
+def normalise_polar_angle(value: Any) -> float | None:
+    numeric_value = coerce_float(value)
+    if numeric_value is None:
+        return None
+
+    wrapped = ((numeric_value % 360.0) + 360.0) % 360.0
+    return 0.0 if abs(wrapped - 360.0) <= 1e-9 else wrapped
+
+
+def calculate_total_above_threshold_span_deg(points: list[dict[str, Any]], threshold_dbm: Any) -> float | None:
+    numeric_threshold = coerce_float(threshold_dbm)
+    if numeric_threshold is None or len(points) < 2:
+        return None
+
+    sample_map: dict[str, tuple[float, float]] = {}
+    for point in points:
+        angle = normalise_polar_angle(point.get("angle_deg"))
+        value = coerce_float(point.get("rx_peak_dbm"))
+        if angle is None or value is None:
+            continue
+
+        key = f"{angle:.6f}"
+        existing = sample_map.get(key)
+        if existing is None or value > existing[1]:
+            sample_map[key] = (angle, value)
+
+    samples = sorted(sample_map.values(), key=lambda item: item[0])
+    if len(samples) < 2:
+        return None
+
+    total_span = 0.0
+    for index, current in enumerate(samples):
+        if index == len(samples) - 1:
+            next_sample = (samples[0][0] + 360.0, samples[0][1])
+        else:
+            next_sample = samples[index + 1]
+
+        delta_angle = next_sample[0] - current[0]
+        if delta_angle <= 0:
+            continue
+
+        current_above = current[1] >= numeric_threshold
+        next_above = next_sample[1] >= numeric_threshold
+
+        if current_above and next_above:
+            total_span += delta_angle
+            continue
+
+        if abs(current[1] - next_sample[1]) <= 1e-12:
+            continue
+
+        crossing_ratio = (numeric_threshold - current[1]) / (next_sample[1] - current[1])
+        if crossing_ratio < 0 or crossing_ratio > 1:
+            continue
+
+        crossing_angle = current[0] + crossing_ratio * delta_angle
+        if current_above and not next_above:
+            total_span += crossing_angle - current[0]
+        elif (not current_above) and next_above:
+            total_span += next_sample[0] - crossing_angle
+
+    return total_span
+
+
+def build_combined_plot_matrix_tables(dataset: dict[str, Any], max_plot_columns_per_table: int = 4) -> list[tuple[list[list[str]], list[int]]]:
+    source_measurements = dataset.get("source_measurements") or []
+    visible_measurement_ids: set[str] = set()
+    cell_lookup: dict[tuple[str, tuple[str, str, str, str]], dict[str, float | None]] = {}
+    column_lookup: dict[tuple[str, str, str, str], dict[str, str]] = {}
+
+    for plot in dataset.get("plots") or []:
+        polarisation = str(plot.get("polarisation") or "").strip()
+        orientation = str(plot.get("orientation") or "").strip()
+
+        for series in plot.get("series") or []:
+            antenna_label = format_antenna_label(series.get("antenna")) or str(series.get("antenna") or "").strip()
+            column_key = (
+                orientation,
+                polarisation,
+                str(series.get("channel") or "").strip(),
+                antenna_label,
+            )
+            column_lookup.setdefault(
+                column_key,
+                {
+                    "orientation": orientation,
+                    "polarisation": polarisation,
+                    "channel": str(series.get("channel") or "").strip(),
+                    "antenna": antenna_label,
+                },
+            )
+
+            measurement_id = str(series.get("source_measurement_id") or "").strip()
+            if not measurement_id:
+                continue
+
+            visible_measurement_ids.add(measurement_id)
+            eirp_dbm = coerce_float(series.get("eirp_dbm"))
+            peak_dbm = coerce_float(series.get("peak_dbm"))
+            span_deg = calculate_total_above_threshold_span_deg(series.get("points") or [], None if peak_dbm is None else peak_dbm - 3.0)
+            existing = cell_lookup.get((measurement_id, column_key))
+
+            if eirp_dbm is None:
+                continue
+
+            if existing is None or existing.get("eirp_dbm") is None or eirp_dbm > existing.get("eirp_dbm", float("-inf")):
+                cell_lookup[(measurement_id, column_key)] = {
+                    "eirp_dbm": eirp_dbm,
+                    "span_deg": span_deg,
+                }
+
+    if not column_lookup or not visible_measurement_ids:
+        return []
+
+    ordered_measurements: list[dict[str, Any]] = []
+    remaining_measurement_ids = set(visible_measurement_ids)
+    for measurement in source_measurements:
+        measurement_id = str(measurement.get("measurement_id") or "").strip()
+        if measurement_id and measurement_id in remaining_measurement_ids:
+            ordered_measurements.append(measurement)
+            remaining_measurement_ids.discard(measurement_id)
+
+    for measurement_id in sorted(remaining_measurement_ids, key=natural_sort_key):
+        ordered_measurements.append({"measurement_id": measurement_id, "measurement_name": measurement_id})
+
+    ordered_columns = sorted(
+        column_lookup.keys(),
+        key=lambda item: (
+            natural_sort_key(item[0]),
+            polarisation_sort_key(item[1]),
+            natural_sort_key(item[2]),
+            antenna_summary_sort_rank(item[3]),
+            natural_sort_key(item[3]),
+        ),
+    )
+
+    tables: list[tuple[list[list[str]], list[int]]] = []
+    for start_index in range(0, len(ordered_columns), max_plot_columns_per_table):
+        column_chunk = ordered_columns[start_index:start_index + max_plot_columns_per_table]
+        header_row = ["Config_Serial"]
+
+        for column_key in column_chunk:
+            column = column_lookup[column_key]
+            label_parts = [
+                column.get("orientation") or "-",
+                format_polarisation_label(column.get("polarisation")),
+                format_summary_channel_label(column.get("channel")),
+            ]
+            if column.get("antenna"):
+                label_parts.append(str(column["antenna"]))
+            label = " ".join(part for part in label_parts if part and part != "-")
+            header_row.extend([f"{label} EIRP", f"{label} 3dB Span"])
+
+        rows = [header_row]
+        for measurement in ordered_measurements:
+            measurement_id = str(measurement.get("measurement_id") or "").strip()
+            row = [compact_measurement_identity_label(measurement)]
+
+            for column_key in column_chunk:
+                cell = cell_lookup.get((measurement_id, column_key))
+                eirp_text = "-" if cell is None or cell.get("eirp_dbm") is None else f"{round(float(cell['eirp_dbm'])):.0f}"
+                span_value = None if cell is None else cell.get("span_deg")
+                span_text = "-" if span_value is None else f"{round(float(span_value)):.0f}\N{DEGREE SIGN}"
+                row.extend([eirp_text, span_text])
+
+            rows.append(row)
+
+        widths = [2200] + [950, 1050] * len(column_chunk)
+        tables.append((rows, widths))
+
+    return tables
+
+
 def should_close_polar_wrap(points: list[dict[str, Any]], max_wrap_gap_degrees: float = 10.0) -> bool:
     if len(points) < 2:
         return False
@@ -599,32 +826,41 @@ def read_yaml_summary_fields(path: Path) -> dict[str, Any]:
         "rx_dist_m": None,
     }
     top_level_fields = {
-        "DUT_product": "dut_product",
-        "DUT_hardware_config": "dut_hardware_config",
-        "DUT_serial_number": "dut_serial_number",
-        "tx_mode": "tx_mode",
-        "Tx_mode": "tx_mode",
-        "foldername_comment": "foldername_comment",
-        "orientation_photo_location": "orientation_photo_location",
+        normalise_yaml_lookup_key("DUT_product"): "dut_product",
+        normalise_yaml_lookup_key("DUT_hardware_config"): "dut_hardware_config",
+        normalise_yaml_lookup_key("DUT_serial_number"): "dut_serial_number",
+        normalise_yaml_lookup_key("tx_mode"): "tx_mode",
+        normalise_yaml_lookup_key("Tx_mode"): "tx_mode",
+        normalise_yaml_lookup_key("foldername_comment"): "foldername_comment",
+        normalise_yaml_lookup_key("orientation_photo_location"): "orientation_photo_location",
     }
     section_fields = {
-        "sig_gen_1": {
-            "device_type": "sig_gen_1_device_type",
-            "tx_mode": "tx_mode",
-            "tx_cable_loss": "tx_cable_loss_db",
-            "tx_power": "tx_power_dbm",
+        normalise_yaml_lookup_key("sig_gen_1"): {
+            normalise_yaml_lookup_key("device_type"): "sig_gen_1_device_type",
+            normalise_yaml_lookup_key("tx_mode"): "tx_mode",
+            normalise_yaml_lookup_key("tx_cable_loss"): "tx_cable_loss_db",
+            normalise_yaml_lookup_key("tx_power"): "tx_power_dbm",
         },
-        "rx_path": {
-            "antenna": "rx_antenna_name",
-            "antenna_comment": "rx_antenna_comment",
-            "rx_antena_gain": "rx_antenna_gain_dbi",
-            "rx_antenna_gain": "rx_antenna_gain_dbi",
-            "rx_cable_loss": "rx_cable_loss_db",
-            "rx_cable_loss_2.45Ghz": "rx_cable_loss_db",
-            "rx_dist_m": "rx_dist_m",
+        normalise_yaml_lookup_key("rx_path"): {
+            normalise_yaml_lookup_key("antenna"): "rx_antenna_name",
+            normalise_yaml_lookup_key("antenna_comment"): "rx_antenna_comment",
+            normalise_yaml_lookup_key("rx_antena_gain"): "rx_antenna_gain_dbi",
+            normalise_yaml_lookup_key("rx_antenna_gain"): "rx_antenna_gain_dbi",
+            normalise_yaml_lookup_key("rx_cable_loss"): "rx_cable_loss_db",
+            normalise_yaml_lookup_key("rx_cable_loss_2.45Ghz"): "rx_cable_loss_db",
+            normalise_yaml_lookup_key("rx_dist_m"): "rx_dist_m",
         },
     }
     active_section: str | None = None
+    current_dut_definition: str | None = None
+    dut_definitions: dict[str, dict[str, Any]] = {}
+    selected_duts: list[str] = []
+    dut_definition_fields = {
+        normalise_yaml_lookup_key("product"): "dut_product",
+        normalise_yaml_lookup_key("hardware_config"): "dut_hardware_config",
+        normalise_yaml_lookup_key("serial_number"): "dut_serial_number",
+        normalise_yaml_lookup_key("foldername_comment"): "foldername_comment",
+    }
 
     with open(extended_path(path), "r", encoding="utf-8") as handle:
         for raw_line in handle:
@@ -635,36 +871,81 @@ def read_yaml_summary_fields(path: Path) -> dict[str, Any]:
             if not stripped:
                 continue
 
-            indent = len(content) - len(content.lstrip(" "))
+            indent = len(content) - len(content.lstrip(" \t"))
 
             if indent == 0:
                 active_section = None
+                current_dut_definition = None
 
                 if stripped.endswith(":"):
-                    section_name = stripped[:-1].strip()
-                    active_section = section_name if section_name in section_fields else None
+                    section_name = normalise_yaml_lookup_key(stripped[:-1])
+                    if section_name == normalise_yaml_lookup_key("dut_definitions"):
+                        active_section = section_name
+                    else:
+                        active_section = section_name if section_name in section_fields else None
                     continue
 
                 if ":" not in stripped:
                     continue
 
                 key, raw_value = stripped.split(":", 1)
-                mapped_key = top_level_fields.get(key.strip())
+                normalised_key = normalise_yaml_lookup_key(key)
+                if normalised_key == normalise_yaml_lookup_key("DUTS"):
+                    parsed_value = parse_yaml_scalar(raw_value)
+                    if isinstance(parsed_value, list):
+                        selected_duts = [str(item).strip() for item in parsed_value if str(item).strip()]
+                    elif parsed_value not in {None, ""}:
+                        selected_duts = [str(parsed_value).strip()]
+                    continue
+
+                mapped_key = top_level_fields.get(normalised_key)
                 if mapped_key is None:
                     continue
 
                 field_values[mapped_key] = parse_yaml_scalar(raw_value)
                 continue
 
+            if active_section == normalise_yaml_lookup_key("dut_definitions"):
+                if stripped.endswith(":") and ":" not in stripped[:-1]:
+                    current_dut_definition = stripped[:-1].strip()
+                    dut_definitions.setdefault(current_dut_definition, {})
+                    continue
+
+                if current_dut_definition is None or ":" not in stripped:
+                    continue
+
+                key, raw_value = stripped.split(":", 1)
+                mapped_key = dut_definition_fields.get(normalise_yaml_lookup_key(key))
+                if mapped_key is None:
+                    continue
+
+                dut_definitions.setdefault(current_dut_definition, {})[mapped_key] = parse_yaml_scalar(raw_value)
+                continue
+
             if active_section is None or ":" not in stripped:
                 continue
 
             key, raw_value = stripped.split(":", 1)
-            mapped_key = section_fields.get(active_section, {}).get(key.strip())
+            mapped_key = section_fields.get(active_section, {}).get(normalise_yaml_lookup_key(key))
             if mapped_key is None:
                 continue
 
             field_values[mapped_key] = parse_yaml_scalar(raw_value)
+
+    selected_dut_definition: dict[str, Any] | None = None
+    for dut_name in selected_duts:
+        if dut_name in dut_definitions:
+            selected_dut_definition = dut_definitions[dut_name]
+            break
+
+    if selected_dut_definition is None and dut_definitions:
+        first_key = next(iter(dut_definitions))
+        selected_dut_definition = dut_definitions[first_key]
+
+    if selected_dut_definition:
+        for key in ("dut_product", "dut_hardware_config", "dut_serial_number", "foldername_comment"):
+            if selected_dut_definition.get(key) not in {None, ""}:
+                field_values[key] = selected_dut_definition.get(key)
 
     field_values["tx_cable_loss_db"] = coerce_float(field_values["tx_cable_loss_db"])
     field_values["tx_power_dbm"] = coerce_float(field_values["tx_power_dbm"])
@@ -1150,6 +1431,7 @@ def load_combined_measurement_dataset(logs_root: Path, measurement_ids: list[str
                 "measurement_id": dataset.get("measurement_id"),
                 "measurement_name": dataset.get("measurement_name"),
                 "measurement_label": short_measurement_label(dataset.get("measurement_name")),
+                "dut_hardware_config": dataset.get("dut_hardware_config"),
                 "dut_serial_number": dataset.get("dut_serial_number"),
                 "yaml_relative_path": dataset.get("yaml_relative_path"),
                 "updated_at": dataset.get("updated_at"),
@@ -1441,15 +1723,15 @@ def read_yaml_named_dimensions(path: Path) -> dict[str, Any]:
         "step_deg": None,
     }
     top_level_fields = {
-        "orientations": "orientations",
-        "polarisation": "polarisation",
-        "step_deg": "step_deg",
+        normalise_yaml_lookup_key("orientations"): "orientations",
+        normalise_yaml_lookup_key("polarisation"): "polarisation",
+        normalise_yaml_lookup_key("step_deg"): "step_deg",
     }
     section_fields = {
-        "sig_gen_1": {
-            "channels": "channels",
-            "power_levels": "power_levels",
-            "CTX": "CTX",
+        normalise_yaml_lookup_key("sig_gen_1"): {
+            normalise_yaml_lookup_key("channels"): "channels",
+            normalise_yaml_lookup_key("power_levels"): "power_levels",
+            normalise_yaml_lookup_key("CTX"): "CTX",
         },
     }
     active_section: str | None = None
@@ -1463,13 +1745,13 @@ def read_yaml_named_dimensions(path: Path) -> dict[str, Any]:
             if not stripped:
                 continue
 
-            indent = len(content) - len(content.lstrip(" "))
+            indent = len(content) - len(content.lstrip(" \t"))
 
             if indent == 0:
                 active_section = None
 
                 if stripped.endswith(":"):
-                    section_name = stripped[:-1].strip()
+                    section_name = normalise_yaml_lookup_key(stripped[:-1])
                     active_section = section_name if section_name in section_fields else None
                     continue
 
@@ -1477,7 +1759,7 @@ def read_yaml_named_dimensions(path: Path) -> dict[str, Any]:
                     continue
 
                 key, raw_value = stripped.split(":", 1)
-                mapped_key = top_level_fields.get(key.strip())
+                mapped_key = top_level_fields.get(normalise_yaml_lookup_key(key))
                 if mapped_key is None:
                     continue
 
@@ -1488,7 +1770,7 @@ def read_yaml_named_dimensions(path: Path) -> dict[str, Any]:
                 continue
 
             key, raw_value = stripped.split(":", 1)
-            mapped_key = section_fields.get(active_section, {}).get(key.strip())
+            mapped_key = section_fields.get(active_section, {}).get(normalise_yaml_lookup_key(key))
             if mapped_key is None:
                 continue
 
@@ -2723,6 +3005,16 @@ def write_combined_analyser_docx_summary(
         [2800, 6560],
     )
 
+    builder.add_heading("Combined Selected Plot Table", 1)
+    matrix_tables = build_combined_plot_matrix_tables(combined_dataset)
+    if not matrix_tables:
+        builder.add_paragraph("No combined plot table data was available.")
+    else:
+        for table_index, (table_rows, table_widths) in enumerate(matrix_tables, start=1):
+            if len(matrix_tables) > 1:
+                builder.add_paragraph(f"Plot table part {table_index} of {len(matrix_tables)}", "Caption", True)
+            builder.add_table(table_rows, table_widths)
+
     builder.add_heading("Combined Plot Summary", 1)
     plot_rows = build_plot_summary_rows(combined_dataset)
     builder.add_table(plot_rows, [2200, 1700, 1200, 1200, 1200, 1400, 1400])
@@ -2740,6 +3032,31 @@ def write_combined_analyser_docx_summary(
 
         for caption, image_path in rendered_plots:
             builder.add_image(image_path, f"Combined plot: {caption}", max_width_in=6.1)
+
+        builder.add_heading("Individual Measurement Plots", 1)
+        for measurement in combined_dataset.get("source_measurements") or []:
+            measurement_id = str(measurement.get("measurement_id") or "").strip()
+            if not measurement_id:
+                continue
+
+            measurement_dataset = load_measurement_dataset(logs_root, measurement_id)
+            measurement_label = compact_measurement_identity_label(measurement)
+            builder.add_heading(f"{measurement_label}", 2)
+
+            measurement_rendered_plots = render_analyser_summary_plots(
+                temp_output_dir / safe_report_filename(measurement_id),
+                measurement_dataset,
+                resolved_measurement_role,
+            )
+            measurement_collage_path = render_analyser_summary_plot_collage(
+                temp_output_dir / f"{safe_report_filename(measurement_id)}_overview.png",
+                measurement_rendered_plots,
+            )
+            if measurement_collage_path is not None:
+                builder.add_image(measurement_collage_path, f"{measurement_label} overview", max_width_in=6.2)
+
+            for caption, image_path in measurement_rendered_plots:
+                builder.add_image(image_path, f"{measurement_label}: {caption}", max_width_in=6.1)
 
         builder.write(output_path)
 

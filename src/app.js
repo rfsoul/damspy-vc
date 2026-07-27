@@ -2918,39 +2918,73 @@ function renderPlotGrid(data) {
 
 function getPlotSummaryColumnKey(plot, series) {
   return [
-    String(series.channel ?? "").trim(),
-    String(plot.polarisation ?? "").trim(),
     String(plot.orientation ?? "").trim(),
+    String(plot.polarisation ?? "").trim(),
+    String(series.channel ?? "").trim(),
     String(series.antenna ?? "").trim(),
-    String(series.power_level ?? "").trim(),
-    String(series.frequency_hz ?? "").trim()
   ].join("::");
 }
 
-function buildPlotSummaryHeaderLabel(column, includeDetail) {
+function buildPlotSummaryChannelLabel(channel) {
+  const text = String(channel ?? "").trim();
+  return text ? "ch" + text : MISSING;
+}
+
+function buildPlotSummaryHeaderLines(column, includeDetail) {
   const parts = [
-    formatCompactChannelLabel(column.channel),
+    String(column.orientation ?? "").trim(),
     formatPolarisationLabel(column.polarisation),
-    String(column.orientation ?? "").trim()
+    buildPlotSummaryChannelLabel(column.channel)
   ].filter((value) => value && value !== MISSING);
 
   if (includeDetail) {
     const antennaLabel = formatAntennaLabel(column.antenna, column);
-    const powerLabel = formatPowerLevel(column.power_level);
-    const frequencyLabel = formatFrequency(column.frequency_hz);
-
     if (antennaLabel) {
       parts.push(antennaLabel);
     }
-    if (powerLabel) {
-      parts.push(powerLabel);
-    }
-    if (frequencyLabel !== MISSING) {
-      parts.push(frequencyLabel);
-    }
   }
 
-  return parts.join(" | ");
+  return parts;
+}
+
+function buildMeasurementIdentityLabel(measurement) {
+  const measurementName = measurement && measurement.measurement_name
+    ? String(measurement.measurement_name).trim().replace(/^Antenna_Pattern_Measurement-/, "")
+    : "";
+  const folderDerivedLabelMatch = measurementName.match(/\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}-(.+?)-Ori(?:_|-|$)/i);
+  let folderDerivedLabel = folderDerivedLabelMatch
+    ? folderDerivedLabelMatch[1].trim()
+    : "";
+
+  if (folderDerivedLabel) {
+    const tokens = folderDerivedLabel.split("_").filter(Boolean);
+    if (tokens.length >= 3 && /^sn/i.test(tokens[2])) {
+      folderDerivedLabel = tokens.slice(0, 3).join("_");
+    }
+  }
+  const hardwareConfig = measurement && measurement.dut_hardware_config
+    ? String(measurement.dut_hardware_config).trim()
+    : "";
+  const serialNumber = measurement && measurement.dut_serial_number
+    ? String(measurement.dut_serial_number).trim()
+    : "";
+  const fallbackLabel = measurement && measurement.measurement_label
+    ? String(measurement.measurement_label).trim()
+    : measurementName
+      ? measurementName
+      : measurement && measurement.yaml_relative_path
+        ? String(measurement.yaml_relative_path).trim().replace(/^.*[\\/]/, "").replace(/\.[^.]+$/, "")
+        : "";
+
+  if (folderDerivedLabel) {
+    return folderDerivedLabel;
+  }
+
+  if (hardwareConfig && serialNumber) {
+    return hardwareConfig + "_" + serialNumber;
+  }
+
+  return hardwareConfig || serialNumber || fallbackLabel || MISSING;
 }
 
 function buildCombinedPlotSummaryModel(data, renderData) {
@@ -3009,7 +3043,7 @@ function buildCombinedPlotSummaryModel(data, renderData) {
 
   const columns = Array.from(columnLookup.values()).map((column) => ({
     ...column,
-    label: buildPlotSummaryHeaderLabel(column, (baseColumnCounts.get(column.baseKey) || 0) > 1)
+    headerLines: buildPlotSummaryHeaderLines(column, (baseColumnCounts.get(column.baseKey) || 0) > 1)
   }));
 
   if (!columns.length || !visibleMeasurementIds.size) {
@@ -3056,7 +3090,7 @@ function renderCombinedPlotSummary(data, renderData) {
 
   const note = document.createElement("p");
   note.className = "plot-summary-note";
-  note.textContent = "Peak EIRP values reflect the plots currently visible under the active filters.";
+  note.textContent = "Values reflect the plots currently visible under the active filters.";
 
   const wrap = document.createElement("div");
   wrap.className = "plot-summary-table-wrap";
@@ -3065,22 +3099,69 @@ function renderCombinedPlotSummary(data, renderData) {
   table.className = "plot-summary-table";
 
   const thead = document.createElement("thead");
-  const headerRow = document.createElement("tr");
-  const serialHeader = document.createElement("th");
-  serialHeader.scope = "col";
-  serialHeader.className = "plot-summary-serial-cell plot-summary-corner-cell";
-  serialHeader.textContent = "Serial Number";
-  headerRow.append(serialHeader);
+  const groupHeaderRow = document.createElement("tr");
+  const cornerHeader = document.createElement("th");
+  cornerHeader.scope = "col";
+  cornerHeader.rowSpan = 2;
+  cornerHeader.className = "plot-summary-serial-cell plot-summary-corner-cell";
+  cornerHeader.textContent = "Hardware Config | Serial Number";
+  groupHeaderRow.append(cornerHeader);
 
   for (const column of model.columns) {
     const header = document.createElement("th");
-    header.scope = "col";
-    header.textContent = column.label;
-    header.title = column.label;
-    headerRow.append(header);
+    header.scope = "colgroup";
+    header.colSpan = 2;
+    header.className = "plot-summary-group-header";
+    header.title = (column.headerLines || []).join(" ");
+
+    const headerStack = document.createElement("div");
+    headerStack.className = "plot-summary-group-stack";
+
+    for (const line of column.headerLines || []) {
+      const lineElement = document.createElement("div");
+      lineElement.className = "plot-summary-group-line";
+      lineElement.textContent = line;
+      headerStack.append(lineElement);
+    }
+
+    header.append(headerStack);
+    groupHeaderRow.append(header);
   }
 
-  thead.append(headerRow);
+  const metricHeaderRow = document.createElement("tr");
+  for (const column of model.columns) {
+    const eirpHeader = document.createElement("th");
+    eirpHeader.scope = "col";
+    eirpHeader.className = "plot-summary-subheader";
+    eirpHeader.title = (column.headerLines || []).join(" ") + " EIRP";
+
+    const eirpStack = document.createElement("div");
+    eirpStack.className = "plot-summary-subheader-stack";
+    const eirpTop = document.createElement("div");
+    eirpTop.textContent = "EIRP";
+    const eirpBottom = document.createElement("div");
+    eirpBottom.textContent = "(dBm)";
+    eirpStack.append(eirpTop, eirpBottom);
+    eirpHeader.append(eirpStack);
+    metricHeaderRow.append(eirpHeader);
+
+    const spanHeader = document.createElement("th");
+    spanHeader.scope = "col";
+    spanHeader.className = "plot-summary-subheader";
+    spanHeader.title = (column.headerLines || []).join(" ") + " 3 dB span";
+
+    const spanStack = document.createElement("div");
+    spanStack.className = "plot-summary-subheader-stack";
+    const spanTop = document.createElement("div");
+    spanTop.textContent = "3dB";
+    const spanBottom = document.createElement("div");
+    spanBottom.textContent = "Span";
+    spanStack.append(spanTop, spanBottom);
+    spanHeader.append(spanStack);
+    metricHeaderRow.append(spanHeader);
+  }
+
+  thead.append(groupHeaderRow, metricHeaderRow);
   table.append(thead);
 
   const tbody = document.createElement("tbody");
@@ -3094,42 +3175,24 @@ function renderCombinedPlotSummary(data, renderData) {
 
     const serialValue = document.createElement("div");
     serialValue.className = "plot-summary-serial-value";
-    serialValue.textContent = measurement && measurement.dut_serial_number
-      ? String(measurement.dut_serial_number)
-      : measurement && measurement.measurement_name
-        ? String(measurement.measurement_name)
-        : MISSING;
-
-    const serialMeta = document.createElement("div");
-    serialMeta.className = "plot-summary-serial-meta";
-    serialMeta.textContent = measurement && measurement.measurement_label
-      ? String(measurement.measurement_label)
-      : measurement && measurement.yaml_relative_path
-        ? String(measurement.yaml_relative_path)
-        : "";
+    serialValue.textContent = buildMeasurementIdentityLabel(measurement);
 
     serialCell.append(serialValue);
-    if (serialMeta.textContent) {
-      serialCell.append(serialMeta);
-    }
     row.append(serialCell);
 
     for (const column of model.columns) {
-      const cell = document.createElement("td");
-      cell.className = "plot-summary-metric-cell";
       const value = model.cellLookup.get(measurementId + "::" + column.key);
+      const eirpCell = document.createElement("td");
+      eirpCell.className = "plot-summary-value-cell";
+      eirpCell.textContent = formatNumber(value && value.eirpDbm, 0);
+      row.append(eirpCell);
 
-      const eirpLine = document.createElement("div");
-      eirpLine.className = "plot-summary-primary-metric";
-      eirpLine.textContent = "Peak EIRP " + formatDbm(value && value.eirpDbm);
-
-      const spanLine = document.createElement("div");
-      spanLine.className = "plot-summary-secondary-metric";
-      spanLine.textContent = "Total >-3 dB Span "
-        + (value && Number.isFinite(value.spanDeg) ? formatDegrees(value.spanDeg) : MISSING);
-
-      cell.append(eirpLine, spanLine);
-      row.append(cell);
+      const spanCell = document.createElement("td");
+      spanCell.className = "plot-summary-value-cell";
+      spanCell.textContent = value && Number.isFinite(value.spanDeg)
+        ? formatNumber(value.spanDeg, 0) + "\u00b0"
+        : MISSING;
+      row.append(spanCell);
     }
 
     tbody.append(row);
