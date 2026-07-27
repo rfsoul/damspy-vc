@@ -43,6 +43,10 @@ const PLOT_FILTER_DIMENSIONS = {
   ORIENTATION: "orientation",
   CHANNEL: "channel"
 };
+const PLOT_COLOR_MODES = {
+  CHANNEL: "channel",
+  UNIQUE: "unique"
+};
 const SIG_GEN_DEVICE_HENDRIX_TX = "hendrix_tx";
 const SIG_GEN_DEVICE_WIRELESS_PRO_RX = "wireless-pro-rx";
 const HENDRIX_GREEN = "#22c55e";
@@ -119,6 +123,7 @@ const analyserElements = {
   deviceRoleHint: document.getElementById("deviceRoleHint"),
   plotMinimumDbInput: document.getElementById("plotMinimumDbInput"),
   differenceOverlayButton: document.getElementById("differenceOverlayButton"),
+  plotColorModeButton: document.getElementById("plotColorModeButton"),
   overlayChannelsButton: document.getElementById("overlayChannelsButton"),
   plotFilterControls: document.getElementById("plotFilterControls"),
   livePlotRefreshButton: document.getElementById("livePlotRefreshButton"),
@@ -152,6 +157,7 @@ const analyserState = {
   plotFolderScope: PLOT_FOLDER_SCOPES.BEST,
   measurementRoleMode: MEASUREMENT_ROLE_MODES.AUTO,
   plotMinimumDb: DEFAULT_PLOT_MIN_DB,
+  plotColorMode: PLOT_COLOR_MODES.CHANNEL,
   showDifferenceOverlay: false,
   unhingedMode: false,
   pickerOpen: false,
@@ -973,6 +979,14 @@ function getChannelColor(channel, index, deviceType = "") {
   return FIXED_CHANNEL_COLORS.get(key) || CHANNEL_COLORS[index % CHANNEL_COLORS.length];
 }
 
+function getSeriesColor(entry, index) {
+  if (analyserState.plotColorMode === PLOT_COLOR_MODES.UNIQUE) {
+    return CHANNEL_COLORS[index % CHANNEL_COLORS.length];
+  }
+
+  return getChannelColor(entry && entry.channel, index, entry && entry.device_type);
+}
+
 function semanticPowerRank(value) {
   const text = String(value ?? "").trim().toLowerCase();
 
@@ -1712,7 +1726,7 @@ function buildPlotSnapshotPayload() {
   for (const plot of renderData.plots || []) {
     const colorisedSeries = sortSeries(plot.series).map((entry, index) => ({
       ...entry,
-      color: getChannelColor(entry.channel, index, entry.device_type),
+      color: getSeriesColor(entry, index),
       lineStyleKey: getSeriesLineStyleKey(entry, measurementRole)
     }));
     const sections = [];
@@ -2250,6 +2264,19 @@ function updateOverlayChannelsButton() {
   analyserElements.overlayChannelsButton.setAttribute("aria-pressed", String(analyserState.overlayChannels));
 }
 
+function updatePlotColorModeButton() {
+  if (!analyserElements.plotColorModeButton) {
+    return;
+  }
+
+  const uniqueMode = analyserState.plotColorMode === PLOT_COLOR_MODES.UNIQUE;
+  analyserElements.plotColorModeButton.classList.toggle("is-active", uniqueMode);
+  analyserElements.plotColorModeButton.textContent = uniqueMode
+    ? "Unique Line Colors"
+    : "Color By Channel";
+  analyserElements.plotColorModeButton.setAttribute("aria-pressed", String(uniqueMode));
+}
+
 function renderPlotFilterControls() {
   if (!analyserElements.plotFilterControls) {
     return;
@@ -2327,6 +2354,7 @@ function updatePlotControlsUi() {
     analyserElements.plotMinimumDbInput.value = String(analyserState.plotMinimumDb);
   }
 
+  updatePlotColorModeButton();
   updateOverlayChannelsButton();
   renderPlotFilterControls();
 }
@@ -3258,7 +3286,7 @@ function createPlotCard(plot, row, column, dataset, mode, orientationImageUrl = 
 
   const colorisedSeries = sortSeries(plot.series).map((entry, index) => ({
     ...entry,
-    color: getChannelColor(entry.channel, index, entry.device_type),
+    color: getSeriesColor(entry, index),
     lineStyleKey: getSeriesLineStyleKey(entry, resolveMeasurementRole(dataset))
   }));
   const visual = document.createElement("div");
@@ -3958,6 +3986,19 @@ function bindAnalyserControls() {
       analyserState.overlayChannels = !analyserState.overlayChannels;
       updatePlotControlsUi();
       updatePlotModeUi();
+
+      if (analyserState.dataset) {
+        renderPlotGrid(analyserState.dataset);
+      }
+    });
+  }
+
+  if (analyserElements.plotColorModeButton) {
+    analyserElements.plotColorModeButton.addEventListener("click", () => {
+      analyserState.plotColorMode = analyserState.plotColorMode === PLOT_COLOR_MODES.UNIQUE
+        ? PLOT_COLOR_MODES.CHANNEL
+        : PLOT_COLOR_MODES.UNIQUE;
+      updatePlotControlsUi();
 
       if (analyserState.dataset) {
         renderPlotGrid(analyserState.dataset);
