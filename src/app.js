@@ -2945,24 +2945,30 @@ function renderPlotGrid(data) {
 }
 
 function getPlotSummaryColumnKey(plot, series) {
+  const channelOrFrequency = String(series.channel ?? "").trim()
+    || String(series.frequency_hz ?? "").trim();
   return [
     String(plot.orientation ?? "").trim(),
     String(plot.polarisation ?? "").trim(),
-    String(series.channel ?? "").trim(),
+    channelOrFrequency,
     String(series.antenna ?? "").trim(),
   ].join("::");
 }
 
-function buildPlotSummaryChannelLabel(channel) {
+function buildPlotSummaryChannelLabel(channel, frequencyHz) {
   const text = String(channel ?? "").trim();
-  return text ? "ch" + text : MISSING;
+  if (text) {
+    return "ch" + text;
+  }
+
+  return formatFrequency(frequencyHz);
 }
 
 function buildPlotSummaryHeaderLines(column, includeDetail) {
   const parts = [
     String(column.orientation ?? "").trim(),
     formatPolarisationLabel(column.polarisation),
-    buildPlotSummaryChannelLabel(column.channel)
+    buildPlotSummaryChannelLabel(column.channel, column.frequency_hz)
   ].filter((value) => value && value !== MISSING);
 
   if (includeDetail) {
@@ -3030,7 +3036,7 @@ function buildCombinedPlotSummaryModel(data, renderData) {
     for (const series of sortSeries(plot.series || [])) {
       const columnKey = getPlotSummaryColumnKey(plot, series);
       const baseKey = [
-        String(series.channel ?? "").trim(),
+        String(series.channel ?? "").trim() || String(series.frequency_hz ?? "").trim(),
         String(plot.polarisation ?? "").trim(),
         String(plot.orientation ?? "").trim()
       ].join("::");
@@ -3053,7 +3059,12 @@ function buildCombinedPlotSummaryModel(data, renderData) {
       if (measurementId) {
         visibleMeasurementIds.add(measurementId);
 
-        const eirpValue = Number(series.eirp_dbm);
+        const eirpValue = series.eirp_dbm === null || series.eirp_dbm === undefined
+          ? Number.NaN
+          : Number(series.eirp_dbm);
+        const gainDbdValue = series.gain_dbd === null || series.gain_dbd === undefined
+          ? Number.NaN
+          : Number(series.gain_dbd);
         const spanValue = calculateTotalAboveThresholdSpanDegrees(series.points || [], Number(series.peak_dbm) - 3);
         if (Number.isFinite(eirpValue)) {
           const cellKey = measurementId + "::" + columnKey;
@@ -3061,6 +3072,7 @@ function buildCombinedPlotSummaryModel(data, renderData) {
           if (!existingCell || !Number.isFinite(existingCell.eirpDbm) || eirpValue > existingCell.eirpDbm) {
             cellLookup.set(cellKey, {
               eirpDbm: eirpValue,
+              gainDbi: Number.isFinite(gainDbdValue) ? gainDbdValue + 2.15 : Number.NaN,
               spanDeg: Number.isFinite(spanValue) ? spanValue : Number.NaN
             });
           }
@@ -3138,7 +3150,7 @@ function renderCombinedPlotSummary(data, renderData) {
   for (const column of model.columns) {
     const header = document.createElement("th");
     header.scope = "colgroup";
-    header.colSpan = 2;
+    header.colSpan = 3;
     header.className = "plot-summary-group-header";
     header.title = (column.headerLines || []).join(" ");
 
@@ -3172,6 +3184,21 @@ function renderCombinedPlotSummary(data, renderData) {
     eirpStack.append(eirpTop, eirpBottom);
     eirpHeader.append(eirpStack);
     metricHeaderRow.append(eirpHeader);
+
+    const gainHeader = document.createElement("th");
+    gainHeader.scope = "col";
+    gainHeader.className = "plot-summary-subheader";
+    gainHeader.title = (column.headerLines || []).join(" ") + " antenna gain";
+
+    const gainStack = document.createElement("div");
+    gainStack.className = "plot-summary-subheader-stack";
+    const gainTop = document.createElement("div");
+    gainTop.textContent = "Gain";
+    const gainBottom = document.createElement("div");
+    gainBottom.textContent = "(dBi)";
+    gainStack.append(gainTop, gainBottom);
+    gainHeader.append(gainStack);
+    metricHeaderRow.append(gainHeader);
 
     const spanHeader = document.createElement("th");
     spanHeader.scope = "col";
@@ -3214,6 +3241,11 @@ function renderCombinedPlotSummary(data, renderData) {
       eirpCell.className = "plot-summary-value-cell";
       eirpCell.textContent = formatNumber(value && value.eirpDbm, 0);
       row.append(eirpCell);
+
+      const gainCell = document.createElement("td");
+      gainCell.className = "plot-summary-value-cell";
+      gainCell.textContent = formatNumber(value && value.gainDbi, 1);
+      row.append(gainCell);
 
       const spanCell = document.createElement("td");
       spanCell.className = "plot-summary-value-cell";

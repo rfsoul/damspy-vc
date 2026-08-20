@@ -3616,7 +3616,7 @@ class WOYMRequestHandler(SimpleHTTPRequestHandler):
                 {
                     "error": (
                         "Permission denied while writing the DOCX summary. "
-                        "Close the existing analyser_summary.docx if it is open in Word or locked by Explorer preview. "
+                        "Close the existing analyser_summary.docx if it is open or locked by another application. "
                         f"Path: {exc.filename or measurement_id}"
                     ),
                 },
@@ -3707,7 +3707,7 @@ class WOYMRequestHandler(SimpleHTTPRequestHandler):
                 {
                     "error": (
                         "Permission denied while writing the combined DOCX summary. "
-                        "Close any existing combined_summary DOCX that may be open in Word or locked by Explorer preview. "
+                        "Close any existing combined_summary DOCX that may be open or locked by another application. "
                         f"Path: {exc.filename or ', '.join(measurement_ids)}"
                     ),
                 },
