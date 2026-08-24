@@ -307,6 +307,16 @@ function formatChannelLabel(channel) {
   return channel === MISSING || channel === null || channel === undefined ? "Ch ?" : "Ch " + channel;
 }
 
+function formatChannelOrFrequencyLabel(channel, frequencyHz) {
+  const channelText = String(channel === MISSING || channel === null || channel === undefined ? "" : channel).trim();
+  if (channelText) {
+    return formatChannelLabel(channelText);
+  }
+
+  const frequencyLabel = formatFrequency(frequencyHz);
+  return frequencyLabel === MISSING ? "Ch ?" : frequencyLabel;
+}
+
 function formatCompactChannelLabel(channel) {
   return channel === MISSING || channel === null || channel === undefined ? "Ch?" : "Ch" + String(channel).trim();
 }
@@ -389,14 +399,20 @@ function formatAntennaLabel(value, entry = null) {
 }
 
 function formatSeriesMeasurementLabel(entry) {
-  const measurementLabel = entry && entry.measurement_label ? String(entry.measurement_label).trim() : "";
-  return measurementLabel;
+  const serialNumber = entry && entry.dut_serial_number ? String(entry.dut_serial_number).trim() : "";
+  const measurementName = entry && entry.source_measurement_name
+    ? String(entry.source_measurement_name).trim()
+    : entry && entry.measurement_label
+      ? String(entry.measurement_label).trim()
+      : "";
+
+  return [serialNumber, measurementName].filter(Boolean).join(" | ");
 }
 
 function formatSeriesLegendDetail(entry) {
   const antennaLabel = formatAntennaLabel(entry.antenna, entry);
   const powerLevel = formatPowerLevel(entry.power_level);
-  return [antennaLabel, formatChannelLabel(entry.channel), powerLevel].filter(Boolean).join(" | ");
+  return [antennaLabel, formatChannelOrFrequencyLabel(entry.channel, entry.frequency_hz), powerLevel].filter(Boolean).join(" | ");
 }
 
 function formatSeriesLabel(entry) {
@@ -1734,13 +1750,13 @@ function buildPlotSnapshotPayload() {
     if (analyserState.overlayChannels) {
       sections.push(buildSnapshotSectionPayload(colorisedSeries, renderData, analyserState.plotDisplayMode));
     } else {
-      for (const channelGroup of groupSeriesByChannel(colorisedSeries)) {
+      for (const channelGroup of groupSeriesByChannelOrFrequency(colorisedSeries)) {
         sections.push(
           buildSnapshotSectionPayload(
             channelGroup.series,
             renderData,
             analyserState.plotDisplayMode,
-            formatCompactChannelLabel(channelGroup.channel)
+            channelGroup.label
           )
         );
       }
@@ -1944,6 +1960,7 @@ async function loadMeasurementDataset(measurementId, options = {}) {
 
 async function loadCombinedMeasurementDataset(measurementIds, options = {}) {
   const selectedIds = measurementIds.filter(Boolean);
+  const background = options.background === true;
 
   if (!selectedIds.length) {
     renderAnalyserEmpty("Select one or more measurements to view the combined summary.");
@@ -1959,8 +1976,10 @@ async function loadCombinedMeasurementDataset(measurementIds, options = {}) {
   analyserState.dataRequestInFlight = true;
   const requestId = ++analyserState.dataRequestSerial;
 
-  analyserElements.title.textContent = ANALYSER_DEFAULT_TITLE;
-  analyserElements.subtitle.textContent = "Loading " + String(selectedIds.length) + " selected measurements...";
+  if (!background || !analyserState.dataset || !analyserState.dataset.combined) {
+    analyserElements.title.textContent = ANALYSER_DEFAULT_TITLE;
+    analyserElements.subtitle.textContent = "Loading " + String(selectedIds.length) + " selected measurements...";
+  }
 
   try {
     const params = new URLSearchParams();
@@ -1984,6 +2003,12 @@ async function loadCombinedMeasurementDataset(measurementIds, options = {}) {
     }
 
     const message = error instanceof Error ? error.message : "Unknown error";
+
+    if (background && analyserState.dataset) {
+      setBanner(analyserElements.banner, "warning", "Live combined plot refresh failed: " + message);
+      return;
+    }
+
     setBanner(analyserElements.banner, "error", "Unable to load combined analyser data: " + message);
     renderAnalyserEmpty("The selected combined measurements could not be parsed.");
   } finally {
@@ -2015,11 +2040,16 @@ async function refreshAnalyserDataIfLive() {
     return;
   }
 
-  if (!analyserState.selectedMeasurementId || analyserState.combinedSummaryMode) {
+  const measurementIds = getActiveMeasurementIds();
+  if (!measurementIds.length) {
     return;
   }
 
-  await loadMeasurementDataset(analyserState.selectedMeasurementId, { background: true });
+  if (analyserState.combinedSummaryMode) {
+    await loadCombinedMeasurementDataset(measurementIds, { background: true });
+  } else {
+    await loadMeasurementDataset(measurementIds[0], { background: true });
+  }
 }
 
 function renderYamlPicker() {
@@ -2218,14 +2248,14 @@ function getPlotModeDescription() {
   if (analyserState.plotDisplayMode === PLOT_DISPLAY_MODES.E_OVER_EMAX) {
     return analyserState.overlayChannels
       ? "Hover to inspect values on the plot. Click a chart to pin the readout. E/Emax includes -3 dB to -20 dB guide circles."
-      : "Hover to inspect values on the plot. Click a chart to pin the readout. E/Emax includes -3 dB to -20 dB guide circles, with separate subplots per channel.";
+      : "Hover to inspect values on the plot. Click a chart to pin the readout. E/Emax includes -3 dB to -20 dB guide circles, with separate subplots per channel or frequency.";
   }
 
   return analyserState.showDifferenceOverlay
     ? "Hover to inspect values on the plot. Click a chart to pin the readout. dB values are relative to the selected set's strongest peak, with per-channel delta overlays for highest minus lowest power."
     : analyserState.overlayChannels
       ? "Hover to inspect values on the plot. Click a chart to pin the readout. dB values are relative to the selected set's strongest peak, using the selected minimum dB floor."
-      : "Hover to inspect values on the plot. Click a chart to pin the readout. dB values are relative to the selected set's strongest peak, using the selected minimum dB floor, with separate subplots per channel.";
+      : "Hover to inspect values on the plot. Click a chart to pin the readout. dB values are relative to the selected set's strongest peak, using the selected minimum dB floor, with separate subplots per channel or frequency.";
 }
 
 function updatePlotModeUi() {
@@ -2259,8 +2289,8 @@ function updateOverlayChannelsButton() {
 
   analyserElements.overlayChannelsButton.classList.toggle("is-active", analyserState.overlayChannels);
   analyserElements.overlayChannelsButton.textContent = analyserState.overlayChannels
-    ? "Overlay Channels On"
-    : "Overlay Channels Off";
+    ? "Overlay Ch/Freq On"
+    : "Overlay Ch/Freq Off";
   analyserElements.overlayChannelsButton.setAttribute("aria-pressed", String(analyserState.overlayChannels));
 }
 
@@ -2417,15 +2447,6 @@ function updateLivePlotRefreshButton() {
     return;
   }
 
-  if (analyserState.combinedSummaryMode) {
-    analyserState.liveRefreshEnabled = false;
-    analyserElements.livePlotRefreshButton.disabled = true;
-    analyserElements.livePlotRefreshButton.classList.remove("is-active");
-    analyserElements.livePlotRefreshButton.textContent = "Live Plot Refresh Off";
-    analyserElements.livePlotRefreshButton.setAttribute("aria-pressed", "false");
-    return;
-  }
-
   analyserElements.livePlotRefreshButton.disabled = false;
   analyserElements.livePlotRefreshButton.classList.toggle("is-active", analyserState.liveRefreshEnabled);
   analyserElements.livePlotRefreshButton.textContent = analyserState.liveRefreshEnabled
@@ -2485,7 +2506,7 @@ function renderFolderList(folders) {
       folder.orientation,
       folder.polarisation,
       formatAntennaLabel(folder.antenna),
-      formatChannelLabel(folder.channel),
+      String(folder.channel ?? "").trim() ? formatChannelLabel(folder.channel) : "",
       formatFrequency(folder.frequency_hz)
     ]
       .filter((value) => value && value !== MISSING)
@@ -2985,17 +3006,6 @@ function buildMeasurementIdentityLabel(measurement) {
   const measurementName = measurement && measurement.measurement_name
     ? String(measurement.measurement_name).trim().replace(/^Antenna_Pattern_Measurement-/, "")
     : "";
-  const folderDerivedLabelMatch = measurementName.match(/\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}-(.+?)-Ori(?:_|-|$)/i);
-  let folderDerivedLabel = folderDerivedLabelMatch
-    ? folderDerivedLabelMatch[1].trim()
-    : "";
-
-  if (folderDerivedLabel) {
-    const tokens = folderDerivedLabel.split("_").filter(Boolean);
-    if (tokens.length >= 3 && /^sn/i.test(tokens[2])) {
-      folderDerivedLabel = tokens.slice(0, 3).join("_");
-    }
-  }
   const hardwareConfig = measurement && measurement.dut_hardware_config
     ? String(measurement.dut_hardware_config).trim()
     : "";
@@ -3010,8 +3020,13 @@ function buildMeasurementIdentityLabel(measurement) {
         ? String(measurement.yaml_relative_path).trim().replace(/^.*[\\/]/, "").replace(/\.[^.]+$/, "")
         : "";
 
-  if (folderDerivedLabel) {
-    return folderDerivedLabel;
+  if (measurementName) {
+    const compactFolderName = measurementName.length <= 37
+      ? measurementName
+      : measurementName.slice(0, 34) + "...";
+    return serialNumber
+      ? serialNumber + " | " + compactFolderName
+      : compactFolderName;
   }
 
   if (hardwareConfig && serialNumber) {
@@ -3144,7 +3159,7 @@ function renderCombinedPlotSummary(data, renderData) {
   cornerHeader.scope = "col";
   cornerHeader.rowSpan = 2;
   cornerHeader.className = "plot-summary-serial-cell plot-summary-corner-cell";
-  cornerHeader.textContent = "Hardware Config | Serial Number";
+  cornerHeader.textContent = "Serial Number | Folder Name";
   groupHeaderRow.append(cornerHeader);
 
   for (const column of model.columns) {
@@ -3231,6 +3246,7 @@ function renderCombinedPlotSummary(data, renderData) {
     const serialValue = document.createElement("div");
     serialValue.className = "plot-summary-serial-value";
     serialValue.textContent = buildMeasurementIdentityLabel(measurement);
+    serialValue.title = String(measurement && measurement.measurement_name ? measurement.measurement_name : "").trim();
 
     serialCell.append(serialValue);
     row.append(serialCell);
@@ -3263,19 +3279,44 @@ function renderCombinedPlotSummary(data, renderData) {
   analyserElements.combinedPlotSummaryContent.append(note, wrap);
 }
 
-function groupSeriesByChannel(series) {
+function getSeriesChannelOrFrequencyGroup(entry) {
+  const channel = String(entry.channel ?? "").trim();
+  if (channel) {
+    return {
+      key: "channel:" + channel,
+      label: formatCompactChannelLabel(channel)
+    };
+  }
+
+  const frequencyHz = entry.frequency_hz === null || entry.frequency_hz === undefined || entry.frequency_hz === ""
+    ? Number.NaN
+    : Number(entry.frequency_hz);
+  if (Number.isFinite(frequencyHz)) {
+    return {
+      key: "frequency:" + frequencyHz,
+      label: formatFrequency(frequencyHz)
+    };
+  }
+
+  return {
+    key: "unknown",
+    label: "Ch/Freq ?"
+  };
+}
+
+function groupSeriesByChannelOrFrequency(series) {
   const grouped = new Map();
 
   for (const entry of series) {
-    const key = String(entry.channel ?? "");
-    const items = grouped.get(key) || [];
-    items.push(entry);
-    grouped.set(key, items);
+    const group = getSeriesChannelOrFrequencyGroup(entry);
+    const existing = grouped.get(group.key) || { label: group.label, series: [] };
+    existing.series.push(entry);
+    grouped.set(group.key, existing);
   }
 
   return Array.from(grouped.entries())
     .sort((left, right) => naturalSortValue(left[0]).localeCompare(naturalSortValue(right[0])))
-    .map(([channel, items]) => ({ channel, series: items }));
+    .map(([, group]) => group);
 }
 
 function createPlotSection(series, row, column, dataset, mode, titleText = "", spinConfig = null) {
@@ -3343,7 +3384,7 @@ function createPlotCard(plot, row, column, dataset, mode, orientationImageUrl = 
     const channelSections = document.createElement("div");
     channelSections.className = "plot-channel-sections";
 
-    for (const channelGroup of groupSeriesByChannel(colorisedSeries)) {
+    for (const channelGroup of groupSeriesByChannelOrFrequency(colorisedSeries)) {
       channelSections.append(
         createPlotSection(
           channelGroup.series,
@@ -3351,7 +3392,7 @@ function createPlotCard(plot, row, column, dataset, mode, orientationImageUrl = 
           column,
           dataset,
           mode,
-          formatCompactChannelLabel(channelGroup.channel),
+          channelGroup.label,
           spinConfig
         )
       );

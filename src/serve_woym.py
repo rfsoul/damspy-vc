@@ -839,7 +839,9 @@ def read_yaml_summary_fields(path: Path) -> dict[str, Any]:
             normalise_yaml_lookup_key("device_type"): "sig_gen_1_device_type",
             normalise_yaml_lookup_key("tx_mode"): "tx_mode",
             normalise_yaml_lookup_key("tx_cable_loss"): "tx_cable_loss_db",
+            normalise_yaml_lookup_key("tx_cable_loss_db"): "tx_cable_loss_db",
             normalise_yaml_lookup_key("tx_power"): "tx_power_dbm",
+            normalise_yaml_lookup_key("level_dbm"): "tx_power_dbm",
         },
         normalise_yaml_lookup_key("rx_path"): {
             normalise_yaml_lookup_key("antenna"): "rx_antenna_name",
@@ -1479,6 +1481,7 @@ def load_combined_measurement_dataset(logs_root: Path, measurement_ids: list[str
                     {
                         "source_measurement_id": dataset.get("measurement_id"),
                         "source_measurement_name": dataset.get("measurement_name"),
+                        "dut_serial_number": dataset.get("dut_serial_number"),
                         "product_name": dataset.get("dut_product") or dataset.get("measurement_name"),
                         "measurement_label": short_measurement_label(dataset.get("measurement_name")),
                         "folder_name": series.get("folder_name"),
@@ -1553,6 +1556,7 @@ def load_combined_measurement_dataset(logs_root: Path, measurement_ids: list[str
             {
                 "source_measurement_id": series.get("source_measurement_id"),
                 "source_measurement_name": series.get("source_measurement_name"),
+                "dut_serial_number": series.get("dut_serial_number"),
                 "product_name": series.get("product_name"),
                 "measurement_label": series.get("measurement_label"),
                 "folder_name": series.get("folder_name"),
@@ -1582,6 +1586,7 @@ def load_combined_measurement_dataset(logs_root: Path, measurement_ids: list[str
             {
                 "source_measurement_id": series.get("source_measurement_id"),
                 "source_measurement_name": series.get("source_measurement_name"),
+                "dut_serial_number": series.get("dut_serial_number"),
                 "product_name": series.get("product_name"),
                 "measurement_label": series.get("measurement_label"),
                 "folder_name": series.get("folder_name"),
@@ -2115,6 +2120,15 @@ def format_channel_label(channel: Any) -> str:
     return "Ch ?" if channel is None or channel == "" else f"Ch {channel}"
 
 
+def format_channel_or_frequency_label(channel: Any, frequency_hz: Any) -> str:
+    channel_text = "" if channel is None else str(channel).strip()
+    if channel_text:
+        return format_channel_label(channel_text)
+
+    frequency_label = report_hz(frequency_hz)
+    return "Ch ?" if frequency_label == "-" else frequency_label
+
+
 def format_power_level_label(value: Any) -> str:
     if value is None or value == "":
         return ""
@@ -2129,7 +2143,11 @@ def format_power_level_label(value: Any) -> str:
 def format_series_label(entry: dict[str, Any]) -> str:
     antenna_label = format_antenna_label(entry.get("antenna"))
     power_level = format_power_level_label(entry.get("power_level"))
-    parts = [antenna_label, format_channel_label(entry.get("channel")), power_level]
+    parts = [
+        antenna_label,
+        format_channel_or_frequency_label(entry.get("channel"), entry.get("frequency_hz")),
+        power_level,
+    ]
     return " | ".join(part for part in parts if part)
 
 
@@ -3168,8 +3186,12 @@ def load_measurement_dataset(logs_root: Path, measurement_id: str) -> dict[str, 
         frequency_hz = peak_point.get("peak_freq_hz") or series_info.get("frequency_hz") or (metadata.get("spec_an_1") or {}).get("center_frequency_hz")
         tx_power_dbm = coerce_float(series_info.get("tx_power"))
         if tx_power_dbm is None:
+            tx_power_dbm = coerce_float(series_info.get("level_dbm"))
+        if tx_power_dbm is None:
             tx_power_dbm = coerce_float(yaml_summary.get("tx_power_dbm"))
         tx_cable_loss_db = coerce_float(series_info.get("tx_cable_loss"))
+        if tx_cable_loss_db is None:
+            tx_cable_loss_db = coerce_float(series_info.get("tx_cable_loss_db"))
         if tx_cable_loss_db is None:
             tx_cable_loss_db = coerce_float(yaml_summary.get("tx_cable_loss_db"))
         rx_antenna_gain_dbi = coerce_float(rx_path_info.get("rx_antenna_gain"))
@@ -3221,6 +3243,8 @@ def load_measurement_dataset(logs_root: Path, measurement_id: str) -> dict[str, 
         elif "wireless pro" in product_text or "wireless-pro" in product_text or "wireless_pro" in product_text:
             tx_antenna = "FPC ant id1" if tx_antenna == "secondary" else "PCB ant id0"
         folder_record = {
+            "source_measurement_name": measurement_dir.name,
+            "dut_serial_number": yaml_summary.get("dut_serial_number"),
             "folder_name": entry.name,
             "product_name": yaml_summary.get("dut_product") or measurement_dir.name,
             "orientation": metadata.get("orientation") or "unknown",
@@ -3300,6 +3324,8 @@ def load_measurement_dataset(logs_root: Path, measurement_id: str) -> dict[str, 
         folder_records.append(
             {
                 "folder_name": folder["folder_name"],
+                "source_measurement_name": folder.get("source_measurement_name"),
+                "dut_serial_number": folder.get("dut_serial_number"),
                 "product_name": folder.get("product_name"),
                 "orientation": folder["orientation"],
                 "polarisation": folder["polarisation"],
@@ -3322,6 +3348,8 @@ def load_measurement_dataset(logs_root: Path, measurement_id: str) -> dict[str, 
             series_records.append(
                 {
                     "folder_name": folder["folder_name"],
+                    "source_measurement_name": folder.get("source_measurement_name"),
+                    "dut_serial_number": folder.get("dut_serial_number"),
                     "product_name": folder.get("product_name"),
                     "channel": folder["channel"],
                     "power_level": folder["power_level"],
